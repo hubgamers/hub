@@ -1,6 +1,6 @@
 'use client';
 
-import { Event } from '@/types/Event';
+import { Event } from '@/lib/types/Event';
 import { Calendar, MapPin, Users } from 'lucide-react';
 
 interface EventCardProps {

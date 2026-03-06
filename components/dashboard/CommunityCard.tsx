@@ -1,6 +1,6 @@
 'use client';
 
-import { Community } from '@/types/Community';
+import { Community } from '@/lib/types/Community';
 import { Users, MessageSquare, Star } from 'lucide-react';
 
 interface CommunityCardProps {

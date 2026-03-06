@@ -1,6 +1,6 @@
 'use client';
 
-import { Tournament } from '@/types/Competition';
+import { Tournament } from '@/lib/types/tournament/Tournament';
 import { Trophy, Users, Gamepad2 } from 'lucide-react';
 
 interface TournamentCardProps {

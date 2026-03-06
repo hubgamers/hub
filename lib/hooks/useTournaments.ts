@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Tournament } from '@/types/Competition';
+import { Tournament } from '../types/database.types';
 
 export function useTournaments() {
   const [tournaments, setTournaments] = useState<Tournament[]>([]);

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Profile } from '@/types/Profile';
+import { Profile } from '../types/database.types';
 
 export function useProfile(userId: string) {
   const [profile, setProfile] = useState<Profile | null>(null);

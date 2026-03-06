@@ -1,6 +1,6 @@
 'use client';
 
-import { Profile } from '@/types/Profile';
+import { Profile } from '@/lib/types/Profile';
 import { User, Shield } from 'lucide-react';
 
 interface ProfileCardProps {

@@ -12,7 +12,7 @@ import {
     Settings,
     Bell
 } from 'lucide-react';
-import { useProfile } from '@/lib/auth'; // Vérifie que ton hook est bien exporté d'ici
+import { useProfile } from '@/lib/hooks'; // Vérifie que ton hook est bien exporté d'ici
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const { session, loading } = useAuth();

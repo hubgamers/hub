@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Event } from '@/types/Event';
+import { Event } from '../types/database.types';
 
 export function useEvents() {
   const [events, setEvents] = useState<Event[]>([]);
@@ -18,7 +18,7 @@ export function useEvents() {
         .order('start_date', { ascending: true });
 
       if (error) throw error;
-      setEvents(data as Event[]);
+      setEvents(data as Eve[]);
     } catch (err) {
       setError(err as Error);
     } finally {
