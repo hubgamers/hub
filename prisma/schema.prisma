@@ -1,0 +1,266 @@
+// prisma/schema.prisma
+
+generator client {
+  provider        = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["public"]
+}
+
+// ─────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────
+
+enum OrgType {
+  SPORT
+  ESPORT
+  MIXED
+
+  @@schema("public")
+}
+
+enum OrgRole {
+  OWNER
+  ADMIN
+  MODERATOR
+  MEMBER
+
+  @@schema("public")
+}
+
+enum TournamentStatus {
+  DRAFT
+  REGISTRATION
+  ONGOING
+  FINISHED
+  CANCELLED
+
+  @@schema("public")
+}
+
+enum PhaseType {
+  GROUP
+  BRACKET_SINGLE
+  BRACKET_DOUBLE
+  ROUND_SWISS
+  CUSTOM
+
+  @@schema("public")
+}
+
+enum MatchStatus {
+  SCHEDULED
+  LIVE
+  FINISHED
+  CANCELLED
+
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────
+// IDENTITÉ
+// ─────────────────────────────────────────
+
+model User {
+  id          String   @id
+  username    String   @unique
+  displayName String   @map("display_name")
+  avatarUrl   String?  @map("avatar_url")
+  country     String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  orgs      OrganizationMember[]
+  ownedOrgs Organization[]
+  players   Player[]
+
+  @@map("users")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────
+// ORGANISATION
+// ─────────────────────────────────────────
+
+model Organization {
+  id        String   @id @default(uuid())
+  name      String
+  slug      String   @unique
+  logoUrl   String?  @map("logo_url")
+  type      OrgType  @default(MIXED)
+  ownerId   String   @map("owner_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  owner       User                 @relation(fields: [ownerId], references: [id])
+  members     OrganizationMember[]
+  teams       Team[]
+  tournaments Tournament[]
+
+  @@map("organizations")
+  @@schema("public")
+}
+
+model OrganizationMember {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String   @map("user_id")
+  role           OrgRole  @default(MEMBER)
+  joinedAt       DateTime @default(now()) @map("joined_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@map("organization_members")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────
+// ÉQUIPES & JOUEURS
+// ─────────────────────────────────────────
+
+model Team {
+  id             String   @id @default(uuid())
+  name           String
+  slug           String
+  logoUrl        String?  @map("logo_url")
+  organizationId String   @map("organization_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization  Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  players       Player[]
+  registrations TournamentRegistration[]
+  homeMatches   Match[]                  @relation("HomeTeam")
+  awayMatches   Match[]                  @relation("AwayTeam")
+
+  @@unique([organizationId, slug])
+  @@map("teams")
+  @@schema("public")
+}
+
+model Player {
+  id        String   @id @default(uuid())
+  teamId    String   @map("team_id")
+  userId    String?  @map("user_id")
+  nickname  String
+  role      String?
+  number    Int?
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  team Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id])
+
+  @@map("players")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────
+// TOURNOI
+// ─────────────────────────────────────────
+
+model Tournament {
+  id             String           @id @default(uuid())
+  name           String
+  slug           String
+  organizationId String           @map("organization_id")
+  game           String
+  description    String?
+  bannerUrl      String?          @map("banner_url")
+  status         TournamentStatus @default(DRAFT)
+  isPublic       Boolean          @default(true) @map("is_public")
+  maxTeams       Int?             @map("max_teams")
+  startDate      DateTime?        @map("start_date")
+  endDate        DateTime?        @map("end_date")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  organization  Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  phases        Phase[]
+  registrations TournamentRegistration[]
+
+  @@unique([organizationId, slug])
+  @@map("tournaments")
+  @@schema("public")
+}
+
+model TournamentRegistration {
+  id           String   @id @default(uuid())
+  tournamentId String   @map("tournament_id")
+  teamId       String   @map("team_id")
+  registeredAt DateTime @default(now()) @map("registered_at")
+  isConfirmed  Boolean  @default(false) @map("is_confirmed")
+  seed         Int?
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  team       Team       @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([tournamentId, teamId])
+  @@map("tournament_registrations")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────
+// PHASES & MATCHS
+// ─────────────────────────────────────────
+
+model Phase {
+  id           String    @id @default(uuid())
+  tournamentId String    @map("tournament_id")
+  name         String
+  type         PhaseType
+  order        Int
+  isCompleted  Boolean   @default(false) @map("is_completed")
+  config       Json?
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  matches    Match[]
+
+  @@map("phases")
+  @@schema("public")
+}
+
+model Match {
+  id          String      @id @default(uuid())
+  phaseId     String      @map("phase_id")
+  homeTeamId  String?     @map("home_team_id")
+  awayTeamId  String?     @map("away_team_id")
+  status      MatchStatus @default(SCHEDULED)
+  scheduledAt DateTime?   @map("scheduled_at")
+  playedAt    DateTime?   @map("played_at")
+  roundNumber Int?        @map("round_number")
+  bracketPos  String?     @map("bracket_pos")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  phase    Phase        @relation(fields: [phaseId], references: [id], onDelete: Cascade)
+  homeTeam Team?        @relation("HomeTeam", fields: [homeTeamId], references: [id])
+  awayTeam Team?        @relation("AwayTeam", fields: [awayTeamId], references: [id])
+  result   MatchResult?
+
+  @@map("matches")
+  @@schema("public")
+}
+
+model MatchResult {
+  id           String   @id @default(uuid())
+  matchId      String   @unique @map("match_id")
+  homeScore    Int      @map("home_score")
+  awayScore    Int      @map("away_score")
+  winnerId     String?  @map("winner_id")
+  notes        String?
+  recordedAt   DateTime @default(now()) @map("recorded_at")
+  recordedById String?  @map("recorded_by_id")
+
+  match Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@map("match_results")
+  @@schema("public")
+}

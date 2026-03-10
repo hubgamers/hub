@@ -10,12 +10,14 @@
     "update-types": "npx supabase gen types typescript --local > lib/types/schema.ts"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.2",
     "@supabase/auth-helpers-nextjs": "^0.15.0",
     "@supabase/ssr": "^0.9.0",
     "@supabase/supabase-js": "^2.98.0",
     "@tanstack/react-query": "^5.90.21",
     "lucide-react": "^0.577.0",
     "next": "16.1.6",
+    "prisma": "^6.19.2",
     "react": "19.2.3",
     "react-dom": "19.2.3"
   },
