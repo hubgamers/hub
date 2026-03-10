@@ -2,7 +2,7 @@
 
 import { useAuth } from '@/lib/auth/AuthProvider';
 import { useRouter } from 'next/navigation';
-import { useEffect } from 'react'; // Retrait de useState et use
+import { useEffect } from 'react';
 import LogoutButton from '@/components/auth/LogoutButton';
 import {
     Calendar,
@@ -10,32 +10,33 @@ import {
     Users,
     LayoutDashboard,
     Settings,
-    Bell
+    Bell,
+    Loader2
 } from 'lucide-react';
-import { useProfile } from '@/lib/hooks'; // Vérifie que ton hook est bien exporté d'ici
+import { useProfile } from '@/lib/hooks';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-    const { session, loading } = useAuth();
+    const { session, loading: authLoading } = useAuth();
     const router = useRouter();
 
-    // 1. Redirection si non connecté
+    // 1. Appel du hook (SANS await)
+    // On utilise une string vide ou null si la session n'est pas prête
+    const { data: profile, isLoading: profileLoading } = useProfile(session?.user?.id || '');
+
+    // 2. Redirection si non connecté (après le chargement initial de l'auth)
     useEffect(() => {
-        if (!loading && !session) {
+        if (!authLoading && !session) {
             router.push('/');
         }
-    }, [session, loading, router]);
+    }, [session, authLoading, router]);
 
-    // 2. Appel du hook de profil (toujours au top-level)
-    // On passe l'id s'il existe, sinon une string vide. 
-    // Le hook gérera le fetch quand l'id deviendra disponible.
-    const { profile, loading: profileLoading } = useProfile(session?.user?.id ?? "");
-
-    // 3. État de chargement (Auth OU Profil)
-    if (loading || (session && profileLoading)) {
+    // 3. Gestion globale du chargement
+    // On attend l'auth ET le profil si une session existe
+    if (authLoading || (session && profileLoading)) {
         return (
             <div className="min-h-screen bg-[#0a0a0c] flex items-center justify-center">
                 <div className="flex flex-col items-center gap-4">
-                    <div className="w-12 h-12 border-4 border-[#5865F2] border-t-transparent rounded-full animate-spin"></div>
+                    <Loader2 className="w-12 h-12 text-[#5865F2] animate-spin" />
                     <p className="text-gray-400 animate-pulse">Chargement de votre univers...</p>
                 </div>
             </div>
@@ -82,7 +83,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                             <Bell size={20} />
                             <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-red-500 rounded-full border-2 border-[#0a0a0c]"></span>
                         </button>
-                        {/* Utilisation de l'avatar du profil si dispo */}
+
                         {profile?.avatar_url ? (
                             <img src={profile.avatar_url} alt="Avatar" className="w-8 h-8 rounded-full border border-white/10 object-cover" />
                         ) : (
@@ -91,7 +92,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     </div>
                 </header>
 
-                <div className="p-4 lg:p-8 max-w-7xl mx-auto w-full">
+                <div className="p-4 lg:p-8 max-w-7xl mx-auto w-full overflow-y-auto">
                     {children}
                 </div>
             </main>
