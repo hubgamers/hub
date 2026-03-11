@@ -1,111 +1,11 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, use } from "react"
 import { Role, type NavigationItem as PrismaNavItem } from "@prisma/client";
 import { NavigationContext } from "@prisma/client"; // ✅ Ajoute cette ligne
-
-// ── Icons (inline SVG pour éviter les dépendances) ──────────────────────────
-
-const Icon = ({ d, size = 20 }: { d: string; size?: number }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-    <path d={d} />
-  </svg>
-)
-
-const Icons = {
-  dashboard: "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
-  tournaments: "M8 21H5a2 2 0 01-2-2v-3m18 5h-3a2 2 0 01-2-2v-3M3 10V5a2 2 0 012-2h3m10 0h3a2 2 0 012 2v5",
-  teams: "M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75",
-  players: "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2M12 11a4 4 0 100-8 4 4 0 000 8z",
-  settings: "M12 15a3 3 0 100-6 3 3 0 000 6zM19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z",
-  chevronLeft: "M15 18l-6-6 6-6",
-  chevronRight: "M9 18l6-6-6-6",
-  bell: "M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9M13.73 21a2 2 0 01-3.46 0",
-  search: "M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z",
-  plus: "M12 5v14M5 12h14",
-  controller: "M6 12h4m2 0h4M8 10v4M18.5 9.5l-1 5M5.5 9.5l1 5M3 8h18a1 1 0 011 1v6a1 1 0 01-1 1H3a1 1 0 01-1-1V9a1 1 0 011-1z",
-  logout: "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9",
-  trophy: "M6 9H4.5a2.5 2.5 0 010-5H6M18 9h1.5a2.5 2.5 0 000-5H18M4 22h16M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22M18 2H6v7a6 6 0 0012 0V2z",
-  flame: "M8.5 14.5A2.5 2.5 0 0011 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 11-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 002.5 3z",
-  grid: "M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z",
-}
-
-// ── Types ────────────────────────────────────────────────────────────────────
-
-type NavItem = {
-  label: string
-  icon: keyof typeof Icons
-  href: string
-  badge?: number
-}
-
-type Organization = {
-  id: string
-  name: string
-  slug: string
-  type: "SPORT" | "ESPORT" | "MIXED"
-  logoUrl?: string
-  role: string
-}
-
-type Notification = {
-  id: string
-  message: string
-  time: string
-  read: boolean
-  type: "match" | "member" | "tournament"
-}
-
-// ── Mock data ────────────────────────────────────────────────────────────────
-
-const MOCK_ORGS: Organization[] = [
-  { id: "1", name: "Thunder Esport", slug: "thunder-esport", type: "ESPORT", role: "OWNER" },
-  { id: "2", name: "FC Rouen", slug: "fc-rouen", type: "SPORT", role: "ADMIN" },
-  { id: "3", name: "All Stars Club", slug: "all-stars", type: "MIXED", role: "MEMBER" },
-]
-
-const MOCK_NOTIFS: Notification[] = [
-  { id: "1", message: "Match Thunder vs Shadow — résultat enregistré", time: "Il y a 5 min", read: false, type: "match" },
-  { id: "2", message: "Novo a rejoint Thunder Esport", time: "Il y a 1h", read: false, type: "member" },
-  { id: "3", message: "Tournoi Spring 2026 ouvert aux inscriptions", time: "Il y a 3h", read: true, type: "tournament" },
-]
-
-// ── Composants UI ─────────────────────────────────────────────────────────────
-
-function OrgTypePill({ type }: { type: Organization["type"] }) {
-  const map = {
-    ESPORT: { label: "Esport", color: "#a78bfa" },
-    SPORT: { label: "Sport", color: "#34d399" },
-    MIXED: { label: "Mixte", color: "#fb923c" },
-  }
-  const { label, color } = map[type]
-  return (
-    <span style={{
-      fontSize: 9, fontWeight: 700, letterSpacing: "0.08em",
-      color, border: `1px solid ${color}30`,
-      background: `${color}12`, borderRadius: 4,
-      padding: "1px 5px", textTransform: "uppercase",
-    }}>{label}</span>
-  )
-}
-
-function Avatar({ name, size = 32, src }: { name: string; size?: number; src?: string }) {
-  const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()
-  const hue = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
-  return src ? (
-    <img src={src} alt={name} width={size} height={size}
-      style={{ borderRadius: "50%", objectFit: "cover" }} />
-  ) : (
-    <div style={{
-      width: size, height: size, borderRadius: "50%",
-      background: `hsl(${hue}, 60%, 35%)`,
-      display: "flex", alignItems: "center", justifyContent: "center",
-      fontSize: size * 0.36, fontWeight: 700, color: `hsl(${hue}, 80%, 85%)`,
-      flexShrink: 0, fontFamily: "inherit",
-    }}>{initials}</div>
-  )
-}
+import { Icon, Icons } from "@/components/dashboard/icons";
+import { Sidebar } from "@/components/dashboard/Sidebar";
+import { Topbar } from "@/components/dashboard/Topbar";
 
 // ── Layout Principal ──────────────────────────────────────────────────────────
 
@@ -125,16 +25,19 @@ export default function DashboardClientShell({
       icon: item.icon as keyof typeof Icons,
       badge: item.children && item.children.length > 0 ? item.children.length : undefined,
     }));
-    console.log(NAV_ITEMS)
+
+  // INITS
   const [collapsed, setCollapsed] = useState(false)
-  const [activeOrg, setActiveOrg] = useState(MOCK_ORGS[0])
+  const [activeOrg, setActiveOrg] = useState([])
   const [activeNav, setActiveNav] = useState("/dashboard")
   const [showNotifs, setShowNotifs] = useState(false)
   const [showOrgMenu, setShowOrgMenu] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [notifs, setNotifs] = useState(MOCK_NOTIFS)
+  const [notifs, setNotifs] = useState([])
   const [mounted, setMounted] = useState(false)
+  const [organizations, setOrganizations] = useState([])
+
 
   useEffect(() => { setMounted(true) }, [])
 
@@ -362,184 +265,8 @@ export default function DashboardClientShell({
         {/* ════════════════════════════════════════
             SIDEBAR
         ════════════════════════════════════════ */}
-        <aside className="hub-sidebar">
+        <Sidebar user={user} navItems={NAV_ITEMS} activeNav={activeNav} setActiveNav={setActiveNav} organizations={organizations} />
 
-          {/* Logo */}
-          <div style={{
-            height: 56, display: "flex", alignItems: "center",
-            padding: collapsed ? "0" : "0 16px",
-            justifyContent: collapsed ? "center" : "space-between",
-            borderBottom: "1px solid var(--border)", flexShrink: 0,
-          }}>
-            {!collapsed && (
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <div style={{
-                  width: 28, height: 28, borderRadius: 6,
-                  background: "linear-gradient(135deg, var(--accent), var(--accent2))",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  flexShrink: 0,
-                }}>
-                  <Icon d={Icons.controller} size={14} />
-                </div>
-                <span style={{
-                  fontFamily: "Syne, sans-serif", fontWeight: 800,
-                  fontSize: 17, letterSpacing: "-0.02em", color: "var(--text)",
-                }}>Hub<span style={{ color: "var(--accent)" }}>Gamers</span></span>
-              </div>
-            )}
-            {collapsed && (
-              <div style={{
-                width: 28, height: 28, borderRadius: 6,
-                background: "linear-gradient(135deg, var(--accent), var(--accent2))",
-                display: "flex", alignItems: "center", justifyContent: "center",
-              }}>
-                <Icon d={Icons.controller} size={14} />
-              </div>
-            )}
-            <button onClick={() => setCollapsed(c => !c)} style={{
-              background: "none", border: "none", cursor: "pointer",
-              color: "var(--muted)", padding: 4, borderRadius: 6,
-              display: "flex", alignItems: "center",
-              transition: "color 0.15s",
-            }}>
-              <Icon d={collapsed ? Icons.chevronRight : Icons.chevronLeft} size={15} />
-            </button>
-          </div>
-
-          {/* Org selector */}
-          <div style={{ padding: collapsed ? "12px 8px" : "12px", flexShrink: 0, position: "relative" }}>
-            <button className="org-btn"
-              onClick={() => { setShowOrgMenu(o => !o); setShowNotifs(false) }}
-              style={{ padding: collapsed ? "10px 0" : "10px 12px", justifyContent: collapsed ? "center" : "flex-start" }}
-            >
-              <Avatar name={activeOrg.name} size={26} />
-              {!collapsed && (
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 12.5, fontWeight: 600, color: "var(--text)",
-                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                  }}>
-                    {activeOrg.name}
-                  </div>
-                  <OrgTypePill type={activeOrg.type} />
-                </div>
-              )}
-            </button>
-
-            {/* Org dropdown */}
-            {showOrgMenu && (
-              <div className="dropdown" style={{
-                top: collapsed ? 0 : "100%",
-                left: collapsed ? W_CLOSED + 8 : 12,
-                right: collapsed ? "auto" : 12,
-                width: collapsed ? 220 : "auto",
-              }}>
-                <div style={{ padding: "8px 0" }}>
-                  {MOCK_ORGS.map(org => (
-                    <button key={org.id} onClick={() => { setActiveOrg(org); setShowOrgMenu(false) }}
-                      style={{
-                        display: "flex", alignItems: "center", gap: 10,
-                        width: "100%", padding: "9px 14px",
-                        background: activeOrg.id === org.id ? "var(--border)" : "none",
-                        border: "none", cursor: "pointer", color: "var(--text)",
-                        fontFamily: "inherit", fontSize: 13, textAlign: "left",
-                        transition: "background 0.1s",
-                      }}
-                    >
-                      <Avatar name={org.name} size={24} />
-                      <div>
-                        <div style={{ fontWeight: 500 }}>{org.name}</div>
-                        <OrgTypePill type={org.type} />
-                      </div>
-                    </button>
-                  ))}
-                </div>
-                <div style={{ borderTop: "1px solid var(--border)", padding: "6px 0" }}>
-                  <button style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    width: "100%", padding: "9px 14px",
-                    background: "none", border: "none", cursor: "pointer",
-                    color: "var(--accent)", fontFamily: "inherit", fontSize: 13,
-                  }}>
-                    <Icon d={Icons.plus} size={14} />
-                    Nouvelle organisation
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="glow-line" />
-
-          {/* Nav */}
-          <nav style={{ flex: 1, padding: collapsed ? "12px 8px" : "12px", overflowY: "auto" }}>
-            {!collapsed && (
-              <div style={{
-                fontSize: 10, fontWeight: 700, letterSpacing: "0.1em",
-                color: "var(--muted)", textTransform: "uppercase", padding: "4px 12px 8px"
-              }}>
-                Navigation
-              </div>
-            )}
-            {NAV_ITEMS.map(item => (
-              <div key={item.href} className={`nav-item ${activeNav === item.href ? "active" : ""}`}
-                onClick={() => setActiveNav(item.href)}
-                title={collapsed ? item.label : undefined}
-              >
-                <Icon d={Icons[item.icon]} size={17} />
-                {!collapsed && <span style={{ flex: 1 }}>{item.label}</span>}
-                {!collapsed && item.badge && (
-                  <span style={{
-                    background: "var(--accent2)", color: "#fff",
-                    fontSize: 10, fontWeight: 700, borderRadius: 10,
-                    padding: "1px 6px", minWidth: 18, textAlign: "center",
-                  }}>{item.badge}</span>
-                )}
-                {collapsed && item.badge && (
-                  <span style={{
-                    position: "absolute", top: 6, right: 6,
-                    width: 7, height: 7, borderRadius: "50%",
-                    background: "var(--accent2)", border: "1.5px solid var(--surface)",
-                  }} />
-                )}
-              </div>
-            ))}
-          </nav>
-
-          {/* User profile */}
-          <div style={{
-            borderTop: "1px solid var(--border)",
-            padding: collapsed ? "12px 8px" : "12px",
-            flexShrink: 0,
-          }}>
-            <div style={{
-              display: "flex", alignItems: "center", gap: 10,
-              padding: collapsed ? "8px 0" : "8px",
-              justifyContent: collapsed ? "center" : "flex-start",
-              borderRadius: 8, cursor: "pointer",
-            }}>
-              <Avatar name="Alexandre D." size={30} />
-              {!collapsed && (
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{
-                    fontSize: 12.5, fontWeight: 600, color: "var(--text)",
-                    overflow: "hidden", textOverflow: "ellipsis"
-                  }}>{user.name}</div>
-                  <div style={{ fontSize: 11, color: "var(--muted)" }}>alexandre@hub.gg</div>
-                </div>
-              )}
-              {!collapsed && (
-                <button style={{
-                  background: "none", border: "none", cursor: "pointer",
-                  color: "var(--muted)", padding: 4, borderRadius: 4,
-                  display: "flex", alignItems: "center",
-                }}>
-                  <Icon d={Icons.logout} size={14} />
-                </button>
-              )}
-            </div>
-          </div>
-        </aside>
 
         {/* ════════════════════════════════════════
             MAIN
@@ -547,99 +274,7 @@ export default function DashboardClientShell({
         <div className="hub-main">
 
           {/* Topbar */}
-          <header className="hub-topbar">
-
-            {/* Search trigger */}
-            <button onClick={() => setShowSearch(true)} style={{
-              display: "flex", alignItems: "center", gap: 8,
-              background: "var(--elevated)", border: "1px solid var(--border2)",
-              borderRadius: 8, padding: "6px 12px", cursor: "pointer",
-              color: "var(--muted)", fontFamily: "inherit", fontSize: 13,
-              transition: "all 0.15s", flex: 1, maxWidth: 320,
-            }}>
-              <Icon d={Icons.search} size={14} />
-              <span>Rechercher...</span>
-              <span style={{
-                marginLeft: "auto", fontSize: 11,
-                background: "var(--border)", borderRadius: 4,
-                padding: "1px 6px", color: "var(--muted)",
-              }}>⌘K</span>
-            </button>
-
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
-
-              {/* Notifications */}
-              <div style={{ position: "relative" }}>
-                <button onClick={() => { setShowNotifs(n => !n); setShowOrgMenu(false) }}
-                  style={{
-                    background: showNotifs ? "var(--elevated)" : "none",
-                    border: "1px solid", borderColor: showNotifs ? "var(--border2)" : "transparent",
-                    borderRadius: 8, padding: 7, cursor: "pointer",
-                    color: showNotifs ? "var(--text)" : "var(--muted)",
-                    display: "flex", alignItems: "center", transition: "all 0.15s",
-                  }}>
-                  <Icon d={Icons.bell} size={17} />
-                </button>
-                {unreadCount > 0 && <span className="notif-badge" />}
-
-                {/* Notifications dropdown */}
-                {showNotifs && (
-                  <div className="dropdown" style={{ top: "calc(100% + 8px)", right: 0, width: 320 }}>
-                    <div style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between",
-                      padding: "12px 16px", borderBottom: "1px solid var(--border)",
-                    }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>Notifications</span>
-                      {unreadCount > 0 && (
-                        <button onClick={markAllRead} style={{
-                          background: "none", border: "none", cursor: "pointer",
-                          color: "var(--accent)", fontSize: 12, fontFamily: "inherit",
-                        }}>Tout lire</button>
-                      )}
-                    </div>
-                    {notifs.map(n => (
-                      <div key={n.id} style={{
-                        padding: "12px 16px",
-                        background: n.read ? "none" : "#00e5ff06",
-                        borderBottom: "1px solid var(--border)",
-                        display: "flex", gap: 10, alignItems: "flex-start",
-                      }}>
-                        <div style={{
-                          width: 32, height: 32, borderRadius: 8, flexShrink: 0,
-                          background: n.type === "match" ? "#f43f5e18"
-                            : n.type === "member" ? "#10b98118" : "#7c3aed18",
-                          display: "flex", alignItems: "center", justifyContent: "center",
-                          color: n.type === "match" ? "var(--danger)"
-                            : n.type === "member" ? "var(--success)" : "var(--accent2)",
-                        }}>
-                          <Icon d={n.type === "match" ? Icons.flame
-                            : n.type === "member" ? Icons.players : Icons.trophy} size={14} />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 12.5, color: "var(--text)", lineHeight: 1.4 }}>{n.message}</div>
-                          <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>{n.time}</div>
-                        </div>
-                        {!n.read && (
-                          <div style={{
-                            width: 6, height: 6, borderRadius: "50%",
-                            background: "var(--accent)", flexShrink: 0, marginTop: 4,
-                          }} />
-                        )}
-                      </div>
-                    ))}
-                    {notifs.length === 0 && (
-                      <div style={{ padding: 24, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>
-                        Aucune notification
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              {/* Avatar */}
-              <Avatar name="Alexandre D." size={30} />
-            </div>
-          </header>
+          <Topbar user={user} notifications={notifs} onMarkAllRead={markAllRead} onSearchClick={() => setShowSearch(true)} />
 
           {/* Content */}
           <main className="hub-content"
