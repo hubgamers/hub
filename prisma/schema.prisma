@@ -272,7 +272,8 @@ enum MatchStatus {
 
 enum NavigationContext {
   ADMIN_SaaS // Pour le dashboard de l'admin global
-  USER_DASHBOARD // Pour le dashboard des utilisateurs/organisations
+  USER_DASHBOARD // Pour le dashboard global
+  ORGANIZATION // Pour une sidebar liée qu'à l'organisation
 
   @@schema("public")
 }

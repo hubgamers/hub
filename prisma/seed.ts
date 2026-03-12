@@ -20,9 +20,9 @@ async function main() {
 
         // --- CATEGORIE USER (USER_DASHBOARD) ---
         { name: 'usr_dash', label: 'Tableau de bord', href: '/dashboard', icon: 'LayoutDashboard', order: 1, context: NavigationContext.USER_DASHBOARD },
-        { name: 'usr_tournaments', label: 'Mes tournois', href: '/dashboard/tournaments', icon: 'Trophy', order: 2, context: NavigationContext.USER_DASHBOARD },
-        { name: 'usr_teams', label: 'Mes équipes', href: '/dashboard/teams', icon: 'Users2', order: 3, context: NavigationContext.USER_DASHBOARD },
-        { name: 'usr_matches', label: 'Mes matchs', href: '/dashboard/matches', icon: 'Play', order: 4, context: NavigationContext.USER_DASHBOARD },
+        { name: 'org_tournaments', label: 'Mes tournois', href: '/dashboard/org/[slug]/tournaments', icon: 'Trophy', order: 2, context: NavigationContext.ORGANIZATION },
+        { name: 'org_teams', label: 'Mes équipes', href: '/dashboard/org/[slug]/teams', icon: 'Users2', order: 3, context: NavigationContext.ORGANIZATION },
+        { name: 'org_matches', label: 'Mes matchs', href: '/dashboard/org[slug]/matches', icon: 'Play', order: 4, context: NavigationContext.ORGANIZATION },
         { name: 'usr_subs', label: 'Abonnements', href: '/dashboard/billing', icon: 'CreditCard', order: 5, context: NavigationContext.USER_DASHBOARD },
         { name: 'usr_settings', label: 'Paramètres', href: '/dashboard/settings', icon: 'Settings2', order: 6, context: NavigationContext.USER_DASHBOARD },
     ]
