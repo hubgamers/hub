@@ -181,6 +181,7 @@ export function Sidebar({ user, navItems, organizations }: SidebarProps) {
                     const isActive = pathname === realHref
                     // On récupère si l'item appartient au contexte ADMIN_SaaS
                     const isAdminItem = item.context === NavigationContext.ADMIN_SaaS
+                    const iconPath = Icons[item.icon as keyof typeof Icons] ?? Icons.grid
 
                     return (
                         <div key={item.href} onClick={() => router.push(realHref)}
@@ -194,7 +195,7 @@ export function Sidebar({ user, navItems, organizations }: SidebarProps) {
                                 marginBottom: 4, transition: "all 0.2s"
                             }}
                         >
-                            <Icon d={Icons[item.icon as keyof typeof Icons]} size={18} />
+                            <Icon d={iconPath} size={18} />
 
                             {/* Badge ADMIN : On le garde même en mode collapsed ? 
                     Ici il s'affiche à côté du label quand c'est ouvert */}

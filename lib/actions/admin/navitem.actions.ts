@@ -31,7 +31,7 @@ async function getAuthUser() {
     const { data: { user }, error } = await supabase.auth.getUser()
 
     if (error || !user) {
-        redirect('/login')
+        redirect('/auth')
     }
 
     // Optionnel : Vérifier ici si user.role === 'ADMIN'

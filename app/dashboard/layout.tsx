@@ -10,7 +10,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const { data: { user: authUser }, error } = await supabase.auth.getUser();
 
   if (error || !authUser) {
-    redirect("/login");
+    redirect("/auth");
   }
 
   // 1. Récupérer l'utilisateur complet depuis ta table Prisma (schéma public)

@@ -13,16 +13,18 @@ async function main() {
         // --- CATEGORIE ADMIN (ADMIN_SaaS) ---
         { name: 'adm_dash', label: 'Tableau de bord', href: '/admin', icon: 'LayoutDashboard', order: 1, context: NavigationContext.ADMIN_SaaS },
         { name: 'adm_users', label: 'Users', href: '/admin/users', icon: 'Users', order: 2, context: NavigationContext.ADMIN_SaaS },
-        { name: 'adm_orgs', label: 'Organizations', href: '/admin/organizations', icon: 'Building', order: 3, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_orgs', label: 'Organizations', href: '/admin/orgs', icon: 'Building', order: 3, context: NavigationContext.ADMIN_SaaS },
         { name: 'adm_tournaments', label: 'Tournaments', href: '/admin/tournaments', icon: 'Trophy', order: 4, context: NavigationContext.ADMIN_SaaS },
         { name: 'adm_teams', label: 'Teams', href: '/admin/teams', icon: 'Users2', order: 5, context: NavigationContext.ADMIN_SaaS },
-        { name: 'adm_settings', label: 'Settings', href: '/admin/settings', icon: 'Settings', order: 6, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_games', label: 'Games', href: '/admin/games', icon: 'Gamepad2', order: 6, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_pitches', label: 'Pitches', href: '/admin/pitches', icon: 'MapPinned', order: 7, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_settings', label: 'Settings', href: '/admin/settings', icon: 'Settings', order: 8, context: NavigationContext.ADMIN_SaaS },
 
         // --- CATEGORIE USER (USER_DASHBOARD) ---
         { name: 'usr_dash', label: 'Tableau de bord', href: '/dashboard', icon: 'LayoutDashboard', order: 1, context: NavigationContext.USER_DASHBOARD },
         { name: 'org_tournaments', label: 'Mes tournois', href: '/dashboard/org/[slug]/tournaments', icon: 'Trophy', order: 2, context: NavigationContext.ORGANIZATION },
         { name: 'org_teams', label: 'Mes équipes', href: '/dashboard/org/[slug]/teams', icon: 'Users2', order: 3, context: NavigationContext.ORGANIZATION },
-        { name: 'org_matches', label: 'Mes matchs', href: '/dashboard/org[slug]/matches', icon: 'Play', order: 4, context: NavigationContext.ORGANIZATION },
+        { name: 'org_matches', label: 'Mes matchs', href: '/dashboard/org/[slug]/matches', icon: 'Play', order: 4, context: NavigationContext.ORGANIZATION },
         { name: 'usr_subs', label: 'Abonnements', href: '/dashboard/billing', icon: 'CreditCard', order: 5, context: NavigationContext.USER_DASHBOARD },
         { name: 'usr_settings', label: 'Paramètres', href: '/dashboard/settings', icon: 'Settings2', order: 6, context: NavigationContext.USER_DASHBOARD },
     ]

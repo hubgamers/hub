@@ -10,7 +10,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
     // Sécurité : Si pas de session, on dégage vers le login
     if (error || !user) {
-        redirect("/login");
+        redirect("/auth");
     }
 
     // Récupère les éléments de navigation pour le contexte ADMIN
