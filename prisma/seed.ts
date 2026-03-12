@@ -3,63 +3,46 @@ import { PrismaClient, NavigationContext } from '@prisma/client'
 const prisma = new PrismaClient()
 
 async function main() {
-    console.log('🚀 Début du seed des menus...')
+    console.log('🚀 Début du nettoyage...')
+    // On vide la table pour repartir sur une base saine
+    await prisma.navigationItem.deleteMany({})
 
-    // --- 1. DÉFINITION DES MENUS PARENTS ---
-    const parentItems = [
-        // Admin SaaS Parents
-        { name: 'admin_management', label: 'Gestion Plateforme', href: '#', icon: 'Shield', order: 1, context: NavigationContext.ADMIN_SaaS },
-        { name: 'admin_system', label: 'Configuration', href: '#', icon: 'Settings', order: 2, context: NavigationContext.ADMIN_SaaS },
+    console.log('🚀 Début du seed des menus (Version Simplifiée)...')
 
-        // User Dashboard Parents
-        { name: 'user_comp', label: 'Compétitions', href: '#', icon: 'Trophy', order: 2, context: NavigationContext.USER_DASHBOARD },
-        { name: 'user_org', label: 'Mon Organisation', href: '#', icon: 'Building', order: 3, context: NavigationContext.USER_DASHBOARD },
+    const menuItems = [
+        // --- CATEGORIE ADMIN (ADMIN_SaaS) ---
+        { name: 'adm_dash', label: 'Tableau de bord', href: '/admin', icon: 'LayoutDashboard', order: 1, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_users', label: 'Users', href: '/admin/users', icon: 'Users', order: 2, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_orgs', label: 'Organizations', href: '/admin/organizations', icon: 'Building', order: 3, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_tournaments', label: 'Tournaments', href: '/admin/tournaments', icon: 'Trophy', order: 4, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_teams', label: 'Teams', href: '/admin/teams', icon: 'Users2', order: 5, context: NavigationContext.ADMIN_SaaS },
+        { name: 'adm_settings', label: 'Settings', href: '/admin/settings', icon: 'Settings', order: 6, context: NavigationContext.ADMIN_SaaS },
+
+        // --- CATEGORIE USER (USER_DASHBOARD) ---
+        { name: 'usr_dash', label: 'Tableau de bord', href: '/dashboard', icon: 'LayoutDashboard', order: 1, context: NavigationContext.USER_DASHBOARD },
+        { name: 'usr_tournaments', label: 'Mes tournois', href: '/dashboard/tournaments', icon: 'Trophy', order: 2, context: NavigationContext.USER_DASHBOARD },
+        { name: 'usr_teams', label: 'Mes équipes', href: '/dashboard/teams', icon: 'Users2', order: 3, context: NavigationContext.USER_DASHBOARD },
+        { name: 'usr_matches', label: 'Mes matchs', href: '/dashboard/matches', icon: 'Play', order: 4, context: NavigationContext.USER_DASHBOARD },
+        { name: 'usr_subs', label: 'Abonnements', href: '/dashboard/billing', icon: 'CreditCard', order: 5, context: NavigationContext.USER_DASHBOARD },
+        { name: 'usr_settings', label: 'Paramètres', href: '/dashboard/settings', icon: 'Settings2', order: 6, context: NavigationContext.USER_DASHBOARD },
     ]
 
-    // --- 2. DÉFINITION DES ENFANTS (SUB-MENUS) ---
-    const childItems = [
-        // Sous-menus pour 'admin_management'
-        { name: 'admin_orgs', label: 'Organisations', href: '/admin/organizations', icon: 'Globe', order: 1, context: NavigationContext.ADMIN_SaaS, parentName: 'admin_management' },
-        { name: 'admin_users', label: 'Utilisateurs', href: '/admin/users', icon: 'Users', order: 2, context: NavigationContext.ADMIN_SaaS, parentName: 'admin_management' },
-
-        // Sous-menus pour 'user_comp'
-        { name: 'user_tournaments', label: 'Mes Tournois', href: '/dashboard/tournaments', icon: 'List', order: 1, context: NavigationContext.USER_DASHBOARD, parentName: 'user_comp' },
-        { name: 'user_brackets', label: 'Arbres de tournois', href: '/dashboard/brackets', icon: 'GitMerge', order: 2, context: NavigationContext.USER_DASHBOARD, parentName: 'user_comp' },
-
-        // Sous-menus pour 'user_org'
-        { name: 'user_team', label: 'Membres', href: '/dashboard/team', icon: 'UserGroup', order: 1, context: NavigationContext.USER_DASHBOARD, parentName: 'user_org' },
-        { name: 'user_settings', label: 'Paramètres', href: '/dashboard/settings', icon: 'Settings2', order: 2, context: NavigationContext.USER_DASHBOARD, parentName: 'user_org' },
-    ]
-
-    // --- 3. UPSERT DES PARENTS ---
-    for (const item of parentItems) {
-        await prisma.navigationItem.upsert({
-            where: { name_context: { name: item.name, context: item.context } },
-            update: item,
-            create: item,
+    // Utilisation d'une boucle simple pour garantir l'ordre et l'exécution
+    for (const item of menuItems) {
+        const created = await prisma.navigationItem.create({
+            data: item
         })
+        console.log(`  ✅ Créé : ${created.name} (${created.context})`)
     }
 
-    // --- 4. UPSERT DES ENFANTS ---
-    for (const item of childItems) {
-        // On récupère l'ID du parent en fonction de son nom et contexte
-        const parent = await prisma.navigationItem.findUnique({
-            where: { name_context: { name: item.parentName, context: item.context } }
-        })
-
-        if (parent) {
-            const { parentName, ...itemData } = item // On retire parentName pour Prisma
-            await prisma.navigationItem.upsert({
-                where: { name_context: { name: item.name, context: item.context } },
-                update: { ...itemData, parentId: parent.id },
-                create: { ...itemData, parentId: parent.id },
-            })
-        }
-    }
-
-    console.log('✅ Menus et sous-menus créés avec succès !')
+    console.log('✨ Seed terminé avec succès !')
 }
 
 main()
-    .catch((e) => console.error(e))
-    .finally(async () => await prisma.$disconnect())
+    .catch((e) => {
+        console.error('❌ Erreur lors du seed:', e)
+        process.exit(1)
+    })
+    .finally(async () => {
+        await prisma.$disconnect()
+    })

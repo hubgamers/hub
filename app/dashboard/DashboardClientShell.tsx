@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, use, createContext, useContext } from "react"
-import { Role, type NavigationItem as PrismaNavItem } from "@prisma/client";
+import { NavigationItem, Role, type NavigationItem as PrismaNavItem } from "@prisma/client";
 import { NavigationContext } from "@prisma/client"; // ✅ Ajoute cette ligne
 import { Icon, Icons } from "@/components/dashboard/icons";
 import { Sidebar } from "@/components/dashboard/Sidebar";
@@ -28,13 +28,7 @@ export default function DashboardClientShell({
   user: UserData
   navItems: (PrismaNavItem & { children: PrismaNavItem[] })[];
 }) {
-  const NAV_ITEMS: NavItem[] = navItems
-    .map((item) => ({
-      label: item.label,
-      href: item.href,
-      icon: item.icon as keyof typeof Icons,
-      badge: item.children && item.children.length > 0 ? item.children.length : undefined,
-    }));
+  const NAV_ITEMS: NavigationItem[] = navItems;
 
   // INITS
   const [collapsed, setCollapsed] = useState(false)

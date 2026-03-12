@@ -34,5 +34,8 @@
     "supabase": "^2.76.17",
     "tailwindcss": "^4",
     "typescript": "^5"
+  },
+  "prisma": {
+    "seed": "ts-node prisma/seed.ts"
   }
 }
