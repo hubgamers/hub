@@ -280,25 +280,24 @@ enum NavigationContext {
 model NavigationItem {
   id       String            @id @default(uuid())
   name     String
-  label    String // Texte affiché dans l'UI
-  href     String // URL de redirection
-  icon     String? // Nom de l'icône Lucide (ex: "Trophy")
+  label    String
+  href     String
+  icon     String?
   order    Int               @default(0)
   isActive Boolean           @default(true)
   context  NavigationContext @default(USER_DASHBOARD)
 
-  // Gestion des sous-menus (Optionnel mais recommandé)
   parentId String?
   parent   NavigationItem?  @relation("SubItems", fields: [parentId], references: [id])
   children NavigationItem[] @relation("SubItems")
 
-  // Gestion des permissions (Optionnel)
-  // Si tu veux que certains menus ne soient visibles que par certains rôles
-  requiredRole String? // ex: "OWNER", "ADMIN"
+  requiredRole String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  // --- LES AJOUTS ICI ---
+  @@unique([name, context]) // Permet l'upsert via name_context
   @@map("admin__navigation_items")
   @@schema("public")
 }

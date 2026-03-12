@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
 import { Icons, Icon } from "./icons"
 import { Avatar, OrgTypePill } from "./ui-components"
@@ -37,9 +37,7 @@ export function Sidebar({ user, navItems, organizations }: SidebarProps) {
     // États locaux
     const [collapsed, setCollapsed] = useState(false)
     const [showOrgMenu, setShowOrgMenu] = useState(false)
-    const [activeOrg, setActiveOrg] = useState<Organization>(
-        organizations[0] || { id: "1", name: "Ma structure", type: "ESPORT" }
-    )
+    const [activeOrg, setActiveOrg] = useState<Organization>(organizations[0])
 
     const W_CLOSED = 64
     const W_OPEN = 260
@@ -102,64 +100,66 @@ export function Sidebar({ user, navItems, organizations }: SidebarProps) {
             </div>
 
             {/* 2. ORG SELECTOR */}
-            <div style={{ padding: collapsed ? "12px 8px" : "12px", flexShrink: 0, position: "relative" }}>
-                <button
-                    className="org-btn"
-                    onClick={() => setShowOrgMenu(!showOrgMenu)}
-                    style={{
-                        width: "100%", display: "flex", alignItems: "center", gap: 10,
-                        padding: collapsed ? "10px 0" : "10px 12px",
-                        justifyContent: collapsed ? "center" : "flex-start",
-                        background: "var(--elevated)", borderRadius: 8, border: "1px solid var(--border2)",
-                        cursor: "pointer"
-                    }}
-                >
-                    <Avatar name={activeOrg.name} size={26} />
-                    {!collapsed && (
-                        <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
-                            <div style={{
-                                fontSize: 12.5, fontWeight: 600, color: "var(--text)",
-                                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
-                            }}>
-                                {activeOrg.name}
+            {activeOrg && (
+                <div style={{ padding: collapsed ? "12px 8px" : "12px", flexShrink: 0, position: "relative" }}>
+                    <button
+                        className="org-btn"
+                        onClick={() => setShowOrgMenu(!showOrgMenu)}
+                        style={{
+                            width: "100%", display: "flex", alignItems: "center", gap: 10,
+                            padding: collapsed ? "10px 0" : "10px 12px",
+                            justifyContent: collapsed ? "center" : "flex-start",
+                            background: "var(--elevated)", borderRadius: 8, border: "1px solid var(--border2)",
+                            cursor: "pointer"
+                        }}
+                    >
+                        <Avatar name={activeOrg.name} size={26} />
+                        {!collapsed && (
+                            <div style={{ flex: 1, minWidth: 0, textAlign: "left" }}>
+                                <div style={{
+                                    fontSize: 12.5, fontWeight: 600, color: "var(--text)",
+                                    overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap"
+                                }}>
+                                    {activeOrg.name}
+                                </div>
+                                <OrgTypePill type={activeOrg.type} />
                             </div>
-                            <OrgTypePill type={activeOrg.type} />
+                        )}
+                    </button>
+
+                    {/* Dropdown Orgs */}
+                    {showOrgMenu && (
+                        <div className="dropdown" style={{
+                            position: "absolute", zIndex: 100,
+                            top: collapsed ? 12 : "100%",
+                            left: collapsed ? W_CLOSED + 8 : 12,
+                            width: 220, background: "var(--surface)",
+                            border: "1px solid var(--border)", borderRadius: 8, boxShadow: "0 10px 25px rgba(0,0,0,0.3)"
+                        }}>
+                            <div style={{ padding: "4px" }}>
+                                {organizations.map(org => (
+                                    <button
+                                        key={org.id}
+                                        onClick={() => { setActiveOrg(org); setShowOrgMenu(false) }}
+                                        className="dropdown-item"
+                                        style={{
+                                            display: "flex", alignItems: "center", gap: 10, width: "100%",
+                                            padding: "8px 10px", border: "none", background: "none",
+                                            color: "var(--text)", cursor: "pointer", borderRadius: 6, textAlign: "left"
+                                        }}
+                                    >
+                                        <Avatar name={org.name} size={24} />
+                                        <div>
+                                            <div style={{ fontSize: 13, fontWeight: 500 }}>{org.name}</div>
+                                            <OrgTypePill type={org.type} />
+                                        </div>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     )}
-                </button>
-
-                {/* Dropdown Orgs */}
-                {showOrgMenu && (
-                    <div className="dropdown" style={{
-                        position: "absolute", zIndex: 100,
-                        top: collapsed ? 12 : "100%",
-                        left: collapsed ? W_CLOSED + 8 : 12,
-                        width: 220, background: "var(--surface)",
-                        border: "1px solid var(--border)", borderRadius: 8, boxShadow: "0 10px 25px rgba(0,0,0,0.3)"
-                    }}>
-                        <div style={{ padding: "4px" }}>
-                            {organizations.map(org => (
-                                <button
-                                    key={org.id}
-                                    onClick={() => { setActiveOrg(org); setShowOrgMenu(false) }}
-                                    className="dropdown-item"
-                                    style={{
-                                        display: "flex", alignItems: "center", gap: 10, width: "100%",
-                                        padding: "8px 10px", border: "none", background: "none",
-                                        color: "var(--text)", cursor: "pointer", borderRadius: 6, textAlign: "left"
-                                    }}
-                                >
-                                    <Avatar name={org.name} size={24} />
-                                    <div>
-                                        <div style={{ fontSize: 13, fontWeight: 500 }}>{org.name}</div>
-                                        <OrgTypePill type={org.type} />
-                                    </div>
-                                </button>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
+                </div>
+            )}
 
             <div className="glow-line" style={{ height: 1, background: "var(--border)", margin: "0 12px" }} />
 

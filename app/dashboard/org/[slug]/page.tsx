@@ -1,4 +1,56 @@
+"use client";
+import { useUser } from "@/components/Provider";
+import { getOrganizationBySlug } from "@/lib/actions/organization/organization.queries"
+import { useParams } from "next/navigation";
+import { useEffect, useState } from "react";
+
+// Mock des icônes et composants manquants dans ton snippet pour que ça compile
+const Icons = { trophy: "", teams: "", players: "", flame: "" };
+const Icon = ({ d, size }: { d: string, size: number }) => <span style={{ fontSize: size }}>⚡</span>;
+
 export default function OrganizationPageResume() {
+  const params = useParams();
+  const slug = params.slug;
+  const user = useUser;
+
+  const [activeOrg, setActiveOrg] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!slug) return;
+
+    const fetchOrg = async () => {
+      try {
+        const data = await getOrganizationBySlug(slug as string);
+        setActiveOrg(data);
+      } catch (error) {
+        console.error("Erreur:", error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchOrg();
+  }, [slug]);
+
+  // --- ÉCRAN DE CHARGEMENT ---
+  if (loading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)" }}>
+        <p style={{ fontFamily: "Syne, sans-serif", fontWeight: 600 }}>Chargement de l'organisation...</p>
+      </div>
+    );
+  }
+
+  // --- SÉCURITÉ SI PAS DE DONNÉES ---
+  if (!activeOrg) {
+    return (
+      <div style={{ padding: 20, color: "var(--danger)" }}>
+        Organisation introuvable ou erreur de chargement.
+      </div>
+    );
+  }
+
   return (
     <>
       {/* Page title */}
@@ -16,7 +68,7 @@ export default function OrganizationPageResume() {
           fontFamily: "Syne, sans-serif", fontWeight: 800,
           fontSize: 26, letterSpacing: "-0.03em", color: "var(--text)",
         }}>
-          Bonjour, {user.name} 👋
+          Bonjour, {user?.name || "Utilisateur"} 👋
         </h1>
         <p style={{ color: "var(--muted)", fontSize: 14, marginTop: 4 }}>
           Voici ce qui se passe dans {activeOrg.name} aujourd'hui.
@@ -154,5 +206,5 @@ export default function OrganizationPageResume() {
         </div>
       </div>
     </>
-  )
+  );
 }

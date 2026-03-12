@@ -1,11 +1,21 @@
 "use client"
 
-import { useState, useEffect, use } from "react"
+import { useState, useEffect, use, createContext, useContext } from "react"
 import { Role, type NavigationItem as PrismaNavItem } from "@prisma/client";
 import { NavigationContext } from "@prisma/client"; // ✅ Ajoute cette ligne
 import { Icon, Icons } from "@/components/dashboard/icons";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { Topbar } from "@/components/dashboard/Topbar";
+import { getUserOrganizations } from "@/lib/actions/organization/organization.queries";
+import { UserProvider } from "@/components/Provider";
+
+// On définit la structure de l'utilisateur
+interface UserData {
+  name: string;
+  email: string | undefined;
+  avatar: string | null;
+  roles: string[];
+}
 
 // ── Layout Principal ──────────────────────────────────────────────────────────
 
@@ -15,7 +25,7 @@ export default function DashboardClientShell({
   navItems
 }: {
   children: React.ReactNode;
-  user: { name: string; email: string; avatar?: string, roles: Role[] };
+  user: UserData
   navItems: (PrismaNavItem & { children: PrismaNavItem[] })[];
 }) {
   const NAV_ITEMS: NavItem[] = navItems
@@ -39,7 +49,19 @@ export default function DashboardClientShell({
   const [organizations, setOrganizations] = useState([])
 
 
-  useEffect(() => { setMounted(true) }, [])
+  useEffect(() => {
+    const fetchOrgs = async () => {
+      try {
+        const data = await getUserOrganizations();
+        setOrganizations(data || []);
+      } catch (error) {
+        console.error("Failed to fetch orgs:", error);
+      } finally {
+        setMounted(true)
+      }
+    };
+    fetchOrgs();
+  }, [])
 
   const unreadCount = notifs.filter(n => !n.read).length
   const W_OPEN = 240
@@ -51,8 +73,9 @@ export default function DashboardClientShell({
 
   return (
     <>
-      {/* ── Google Fonts ── */}
-      <style>{`
+      <UserProvider initialData={{ user: user, navItems, organizations }}>
+        {/* ── Google Fonts ── */}
+        <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
 
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -260,80 +283,81 @@ export default function DashboardClientShell({
         }
       `}</style>
 
-      <div className="hub-layout">
+        <div className="hub-layout">
 
-        {/* ════════════════════════════════════════
+          {/* ════════════════════════════════════════
             SIDEBAR
         ════════════════════════════════════════ */}
-        <Sidebar user={user} navItems={NAV_ITEMS} activeNav={activeNav} setActiveNav={setActiveNav} organizations={organizations} />
+          <Sidebar user={user} navItems={NAV_ITEMS} activeNav={activeNav} setActiveNav={setActiveNav} organizations={organizations} />
 
 
-        {/* ════════════════════════════════════════
+          {/* ════════════════════════════════════════
             MAIN
         ════════════════════════════════════════ */}
-        <div className="hub-main">
+          <div className="hub-main">
 
-          {/* Topbar */}
-          <Topbar user={user} notifications={notifs} onMarkAllRead={markAllRead} onSearchClick={() => setShowSearch(true)} />
+            {/* Topbar */}
+            <Topbar user={user} notifications={notifs} onMarkAllRead={markAllRead} onSearchClick={() => setShowSearch(true)} />
 
-          {/* Content */}
-          <main className="hub-content"
-            onClick={() => { setShowNotifs(false); setShowOrgMenu(false) }}>
+            {/* Content */}
+            <main className="hub-content"
+              onClick={() => { setShowNotifs(false); setShowOrgMenu(false) }}>
 
-            {children}
-          </main>
-        </div>
-      </div>
-
-      {/* ════════════════════════════════════════
-          SEARCH OVERLAY
-      ════════════════════════════════════════ */}
-      {showSearch && (
-        <div className="search-overlay" onClick={() => setShowSearch(false)}>
-          <div className="search-box" onClick={e => e.stopPropagation()}>
-            <div style={{
-              display: "flex", alignItems: "center", padding: "0 20px",
-              borderBottom: "1px solid var(--border)"
-            }}>
-              <Icon d={Icons.search} size={16} />
-              <input className="search-input"
-                autoFocus
-                placeholder="Rechercher un tournoi, une équipe, un joueur..."
-                value={searchQuery}
-                onChange={e => setSearchQuery(e.target.value)}
-              />
-              <kbd onClick={() => setShowSearch(false)} style={{
-                background: "var(--border)", border: "1px solid var(--border2)",
-                borderRadius: 4, padding: "2px 6px", fontSize: 11,
-                color: "var(--muted)", cursor: "pointer", fontFamily: "inherit",
-              }}>ESC</kbd>
-            </div>
-            <div style={{ padding: "8px 0" }}>
-              {["Spring Cup 2026", "Thunder Esport A", "Alexandre D.", "FC Rouen — Liga Open"].map(r => (
-                <div key={r} style={{
-                  padding: "9px 20px", fontSize: 13, color: "var(--muted)",
-                  cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
-                  transition: "background 0.1s",
-                }}
-                  onMouseEnter={e => (e.currentTarget.style.background = "var(--border)")}
-                  onMouseLeave={e => (e.currentTarget.style.background = "none")}
-                >
-                  <Icon d={Icons.search} size={13} />
-                  {r}
-                </div>
-              ))}
-            </div>
-            <div style={{
-              borderTop: "1px solid var(--border)", padding: "8px 20px",
-              display: "flex", gap: 16, fontSize: 11, color: "var(--muted)",
-            }}>
-              <span>↵ Ouvrir</span>
-              <span>↑↓ Naviguer</span>
-              <span>ESC Fermer</span>
-            </div>
+              {children}
+            </main>
           </div>
         </div>
-      )}
+
+        {/* ════════════════════════════════════════
+          SEARCH OVERLAY
+      ════════════════════════════════════════ */}
+        {showSearch && (
+          <div className="search-overlay" onClick={() => setShowSearch(false)}>
+            <div className="search-box" onClick={e => e.stopPropagation()}>
+              <div style={{
+                display: "flex", alignItems: "center", padding: "0 20px",
+                borderBottom: "1px solid var(--border)"
+              }}>
+                <Icon d={Icons.search} size={16} />
+                <input className="search-input"
+                  autoFocus
+                  placeholder="Rechercher un tournoi, une équipe, un joueur..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+                <kbd onClick={() => setShowSearch(false)} style={{
+                  background: "var(--border)", border: "1px solid var(--border2)",
+                  borderRadius: 4, padding: "2px 6px", fontSize: 11,
+                  color: "var(--muted)", cursor: "pointer", fontFamily: "inherit",
+                }}>ESC</kbd>
+              </div>
+              <div style={{ padding: "8px 0" }}>
+                {["Spring Cup 2026", "Thunder Esport A", "Alexandre D.", "FC Rouen — Liga Open"].map(r => (
+                  <div key={r} style={{
+                    padding: "9px 20px", fontSize: 13, color: "var(--muted)",
+                    cursor: "pointer", display: "flex", alignItems: "center", gap: 10,
+                    transition: "background 0.1s",
+                  }}
+                    onMouseEnter={e => (e.currentTarget.style.background = "var(--border)")}
+                    onMouseLeave={e => (e.currentTarget.style.background = "none")}
+                  >
+                    <Icon d={Icons.search} size={13} />
+                    {r}
+                  </div>
+                ))}
+              </div>
+              <div style={{
+                borderTop: "1px solid var(--border)", padding: "8px 20px",
+                display: "flex", gap: 16, fontSize: 11, color: "var(--muted)",
+              }}>
+                <span>↵ Ouvrir</span>
+                <span>↑↓ Naviguer</span>
+                <span>ESC Fermer</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </UserProvider>
     </>
   )
 }

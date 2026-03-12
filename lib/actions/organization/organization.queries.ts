@@ -1,3 +1,4 @@
+"use server"
 import { prisma } from "@/lib/prisma";
 import { cache } from "react";
 import { getAuthUser } from "@/lib/actions/utils.actions";
