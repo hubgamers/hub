@@ -1,92 +1,45 @@
 'use server'
 
 import { prisma } from '@/lib/prisma'
-import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { getAuthUser } from './utils.actions'
 
-
-
-// ─────────────────────────────────────────
-// HELPER — check tournament ownership
-// ─────────────────────────────────────────
-async function assertTournamentOrganizer(tournamentId: string, userId: string) {
-  const tournament = await prisma.tournament.findUnique({
-    where: { id: tournamentId },
-    select: { organizer_id: true },
-  })
-
-  if (!tournament) {
-    throw new Error('Tournoi non trouvé')
-  }
-
-  if (tournament.organizer_id !== userId) {
-    throw new Error("Permission refusée : vous n'êtes pas l'organisateur")
-  }
-
-  return tournament
-}
-
-// ─────────────────────────────────────────
-// SCHEMAS
-// ─────────────────────────────────────────
-const TournamentFormatEnum = z.enum([
-  'SINGLE_ELIM',
-  'DOUBLE_ELIM',
-  'SWISS',
-  'POULES',
-  'FFA',
-])
+const TournamentStatusEnum = z.enum(['DRAFT', 'REGISTRATION', 'ONGOING', 'FINISHED', 'CANCELLED'])
 
 const CreateTournamentSchema = z.object({
   name: z.string().min(3, 'Le nom doit faire au moins 3 caractères').max(100),
-  game_name: z.string().min(2, 'Le nom du jeu est requis').max(50),
-  format_type: TournamentFormatEnum,
-  max_participants: z.coerce
-    .number()
-    .int()
-    .min(2, 'Il faut au moins 2 participants'),
-  // FormData envoie tout en string, on transforme la string JSON en objet
-  format_settings: z.string().transform((str, ctx) => {
-    try {
-      return JSON.parse(str)
-    } catch (e) {
-      ctx.addIssue({ code: 'custom', message: 'Format des settings invalide' })
-      return z.NEVER
-    }
-  }),
+  slug: z.string().min(2, 'Le slug est requis').max(80),
+  organizationId: z.string().uuid('Organization invalide'),
+  gameId: z.string().uuid('Jeu invalide'),
+  description: z.string().max(500).optional().or(z.literal('')),
+  status: TournamentStatusEnum.default('DRAFT'),
 })
+
+const UpdateTournamentSchema = CreateTournamentSchema.partial().omit({ organizationId: true })
 
 export type TournamentFormState = {
   message?: string | null
   errors?: {
     name?: string[]
-    game_name?: string[]
-    format_type?: string[]
-    max_participants?: string[]
-    format_settings?: string[]
+    slug?: string[]
+    organizationId?: string[]
+    gameId?: string[]
+    description?: string[]
+    status?: string[]
     _form?: string[]
   }
 }
 
-// ─────────────────────────────────────────
-// CREATE TOURNAMENT
-// ─────────────────────────────────────────
 export async function createTournament(
   prevState: TournamentFormState,
   formData: FormData
 ): Promise<TournamentFormState> {
-  const user = await getAuthUser()
+  void prevState
+  await getAuthUser()
 
-  const parsed = CreateTournamentSchema.safeParse({
-    name: formData.get('name'),
-    game_name: formData.get('game_name'),
-    format_type: formData.get('format_type'),
-    max_participants: formData.get('max_participants'),
-    format_settings: formData.get('format_settings'),
-  })
+  const parsed = CreateTournamentSchema.safeParse(Object.fromEntries(formData))
 
   if (!parsed.success) {
     return {
@@ -95,74 +48,54 @@ export async function createTournament(
     }
   }
 
-  const {
-    name,
-    game_name,
-    format_type,
-    max_participants,
-    format_settings,
-  } = parsed.data
+  const { name, slug, organizationId, gameId, description, status } = parsed.data
 
-  let tournament
   try {
-    tournament = await prisma.tournament.create({
+    const tournament = await prisma.tournament.create({
       data: {
         name,
-        game_name,
-        format_type,
-        max_participants,
-        format_settings,
-        organizer_id: user.id,
-        status: 'SETUP', // Statut par défaut à la création
+        slug,
+        organizationId,
+        gameId,
+        description: description || null,
+        status,
       },
     })
-  } catch (e) {
-    console.error(e)
+
+    revalidatePath(`/dashboard/org/${organizationId}/tournaments`)
+    redirect(`/dashboard/org/${organizationId}/tournaments/${tournament.slug}`)
+  } catch (error) {
+    console.error(error)
     return { message: "Erreur lors de la création du tournoi." }
   }
-
-  revalidatePath('/dashboard/competition')
-  redirect(`/dashboard/competition/${tournament.id}`)
 }
 
-// ─────────────────────────────────────────
-// GET USER'S TOURNAMENTS
-// ─────────────────────────────────────────
 export async function getUserTournaments() {
   const user = await getAuthUser()
 
-  const tournaments = await prisma.tournament.findMany({
-    where: { organizer_id: user.id },
+  return prisma.tournament.findMany({
+    where: {
+      organization: {
+        members: {
+          some: { userId: user.id },
+        },
+      },
+    },
     orderBy: { createdAt: 'desc' },
   })
-
-  return tournaments
 }
 
-// ─────────────────────────────────────────
-// GET TOURNAMENT BY ID
-// ─────────────────────────────────────────
 export async function getTournamentById(id: string) {
-  const tournament = await prisma.tournament.findUnique({
-    where: { id },
-    // Inclure d'autres données si nécessaire (participants, etc.)
-  })
-
-  return tournament
+  return prisma.tournament.findUnique({ where: { id } })
 }
-
-// ─────────────────────────────────────────
-// UPDATE TOURNAMENT
-// ─────────────────────────────────────────
-const UpdateTournamentSchema = CreateTournamentSchema.partial()
 
 export async function updateTournament(
   tournamentId: string,
   prevState: TournamentFormState,
   formData: FormData
 ): Promise<TournamentFormState> {
-  const user = await getAuthUser()
-  await assertTournamentOrganizer(tournamentId, user.id)
+  void prevState
+  await getAuthUser()
 
   const parsed = UpdateTournamentSchema.safeParse(Object.fromEntries(formData))
 
@@ -176,34 +109,32 @@ export async function updateTournament(
   try {
     await prisma.tournament.update({
       where: { id: tournamentId },
-      data: parsed.data,
+      data: {
+        ...parsed.data,
+        description: parsed.data.description === '' ? null : parsed.data.description,
+      },
     })
 
-    revalidatePath(`/dashboard/competition/${tournamentId}`)
-    revalidatePath('/dashboard/competition')
+    revalidatePath(`/dashboard/org/*/tournaments/${tournamentId}`)
     return { message: 'Tournoi mis à jour avec succès.' }
-  } catch (e) {
-    console.error(e)
+  } catch (error) {
+    console.error(error)
     return { message: 'Erreur lors de la mise à jour du tournoi.' }
   }
 }
 
-// ─────────────────────────────────────────
-// DELETE TOURNAMENT
-// ─────────────────────────────────────────
 export async function deleteTournament(tournamentId: string) {
-  const user = await getAuthUser()
-  await assertTournamentOrganizer(tournamentId, user.id)
+  await getAuthUser()
 
   try {
     await prisma.tournament.delete({
       where: { id: tournamentId },
     })
-  } catch (e) {
-    console.error(e)
+  } catch (error) {
+    console.error(error)
     return { error: 'Erreur lors de la suppression du tournoi.' }
   }
 
-  revalidatePath('/dashboard/competition')
-  redirect('/dashboard/competition')
+  revalidatePath('/dashboard')
+  redirect('/dashboard')
 }

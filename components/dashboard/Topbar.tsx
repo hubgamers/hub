@@ -14,7 +14,7 @@ interface Notification {
 }
 
 interface TopbarProps {
-    user: { name: string; avatar?: string };
+    user: { name: string; avatar?: string | null };
     notifications: Notification[];
     onMarkAllRead: () => void;
     onSearchClick: () => void;
@@ -92,7 +92,7 @@ export function Topbar({ user, notifications, onMarkAllRead, onSearchClick }: To
                 </div>
 
                 {/* 3. USER AVATAR */}
-                <Avatar name={user.name} src={user.avatar} size={30} />
+                <Avatar name={user.name} src={user.avatar ?? undefined} size={30} />
             </div>
         </header>
     )

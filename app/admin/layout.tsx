@@ -14,18 +14,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
     }
 
     // Récupère les éléments de navigation pour le contexte ADMIN
-    const navItems = await findNavigationItems(NavigationContext.ADMIN);
+    const navItems = await findNavigationItems(NavigationContext.ADMIN_SaaS);
 
     // On prépare les données utilisateur pour le client
-    console.log("AA", user)
     const userData = {
         name: user.user_metadata.full_name || "Utilisateur",
         email: user.email,
         avatar: user.user_metadata.avatar_url,
-        roles: user.user_metadata.roles
+        roles: user.user_metadata.roles,
+        role: "ADMIN" as const,
     };
-
-    console.log(userData)
 
     return (
         <DashboardClientShell user={userData} navItems={navItems}>

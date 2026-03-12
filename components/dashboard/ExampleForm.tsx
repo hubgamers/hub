@@ -1,7 +1,7 @@
 "use client";
 
 import { createOrganization, FormState } from "@/lib/actions/organization/organization.actions";
-import { useActionState, useState, useEffect } from "react";
+import { useActionState, useState, type ChangeEvent } from "react";
 import { Trophy, Globe, Fingerprint, Activity, Loader2 } from "lucide-react";
 
 const initialState: FormState = {
@@ -9,19 +9,30 @@ const initialState: FormState = {
     errors: {},
 };
 
+const slugify = (value: string) =>
+    value
+        .toLowerCase()
+        .replace(/ /g, "-")
+        .replace(/[^\w-]+/g, "");
+
 export default function CreateOrgForm() {
     const [state, formAction, isPending] = useActionState(createOrganization, initialState);
     const [slug, setSlug] = useState("");
     const [name, setName] = useState("");
+    const [slugEdited, setSlugEdited] = useState(false);
 
-    // Auto-génération du slug à partir du nom
-    useEffect(() => {
-        const generatedSlug = name
-            .toLowerCase()
-            .replace(/ /g, "-")
-            .replace(/[^\w-]+/g, "");
-        setSlug(generatedSlug);
-    }, [name]);
+    const handleNameChange = (e: ChangeEvent<HTMLInputElement>) => {
+        const nextName = e.target.value;
+        setName(nextName);
+        if (!slugEdited) {
+            setSlug(slugify(nextName));
+        }
+    };
+
+    const handleSlugChange = (e: ChangeEvent<HTMLInputElement>) => {
+        setSlug(e.target.value);
+        setSlugEdited(true);
+    };
 
     return (
         <div className="w-full max-w-xl mx-auto">
@@ -37,13 +48,13 @@ export default function CreateOrgForm() {
                     {/* Champ Nom */}
                     <div className="space-y-2">
                         <label className="text-sm font-medium text-slate-300 flex items-center gap-2">
-                            <Trophy size={16} className="text-indigo-400" /> Nom de l'organisation
+                            <Trophy size={16} className="text-indigo-400" /> Nom de l&apos;organisation
                         </label>
                         <input
                             name="name"
                             type="text"
                             value={name}
-                            onChange={(e) => setName(e.target.value)}
+                            onChange={handleNameChange}
                             placeholder="Ex: Thunder Esport"
                             className="w-full bg-[#131920] border border-slate-700 rounded-xl px-4 py-3 text-white placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
                         />
@@ -65,7 +76,7 @@ export default function CreateOrgForm() {
                                 name="slug"
                                 type="text"
                                 value={slug}
-                                onChange={(e) => setSlug(e.target.value)}
+                                onChange={handleSlugChange}
                                 className="w-full bg-[#131920] border border-slate-700 rounded-xl pl-[62px] pr-4 py-3 text-white font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all"
                             />
                         </div>
@@ -97,7 +108,6 @@ export default function CreateOrgForm() {
                     <div className={`p-4 rounded-xl flex items-center gap-3 animate-in fade-in slide-in-from-top-2 ${state.errors ? 'bg-red-500/10 border border-red-500/20 text-red-400' : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
                         }`}>
                         <span className="text-sm font-medium">{state.message}</span>
-                        <span className="text-sm font-medium">{state.message?.errors}</span>
                     </div>
                 )}
 
@@ -114,7 +124,7 @@ export default function CreateOrgForm() {
                         </>
                     ) : (
                         <>
-                            <span>Créer l'espace</span>
+                            <span>Créer l&apos;espace</span>
                             <Globe size={18} className="group-hover:translate-x-1 transition-transform" />
                         </>
                     )}

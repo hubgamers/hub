@@ -1,5 +1,5 @@
 export default function DashboardOrgTournaments() {
     return (
-        <h1>Tournois de l'org</h1>
+        <h1>Tournois de l&apos;org</h1>
     )
 }

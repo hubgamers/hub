@@ -43,7 +43,8 @@ export async function createNavItem(
     prevState: FormState,
     formData: FormData
 ): Promise<FormState> {
-    const user = await getAuthUser()
+    await getAuthUser()
+    void prevState
 
     // Conversion manuelle car FormData renvoie des strings
     const rawData = {

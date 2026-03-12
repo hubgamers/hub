@@ -1,4 +1,5 @@
 // components/dashboard/ui-components.tsx
+import Image from "next/image"
 
 export function OrgTypePill({ type }: { type: "SPORT" | "ESPORT" | "MIXED" }) {
     const map = {
@@ -21,8 +22,14 @@ export function Avatar({ name, size = 32, src }: { name: string; size?: number; 
     const initials = name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()
     const hue = name.split("").reduce((acc, c) => acc + c.charCodeAt(0), 0) % 360
     return src ? (
-        <img src={src} alt={name} width={size} height={size}
-            style={{ borderRadius: "50%", objectFit: "cover" }} />
+        <Image
+            src={src}
+            alt={name}
+            width={size}
+            height={size}
+            unoptimized
+            style={{ borderRadius: "50%", objectFit: "cover" }}
+        />
     ) : (
         <div style={{
             width: size, height: size, borderRadius: "50%",

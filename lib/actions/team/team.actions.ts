@@ -3,10 +3,10 @@
 import { prisma } from '@/lib/prisma'
 import { TeamSchema } from '@/lib/validations/team'
 import { revalidatePath } from 'next/cache'
-import { getAuthUser } from './utils.actions'
+import { getAuthUser } from '../utils.actions'
 
 export async function createTeam(formData: FormData) {
-    const user = await getAuthUser()
+    await getAuthUser()
     const validated = TeamSchema.safeParse(Object.fromEntries(formData.entries()))
 
     if (!validated.success) return { errors: validated.error.flatten().fieldErrors }
@@ -24,7 +24,7 @@ export async function createTeam(formData: FormData) {
         })
         revalidatePath(`/dashboard/org/${organizationId}/teams`)
         return { success: true, team }
-    } catch (error) {
+    } catch {
         return { error: "Erreur lors de la création de l'équipe (slug peut-être déjà pris)" }
     }
 }

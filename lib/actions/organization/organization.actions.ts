@@ -7,74 +7,97 @@ import { OrganizationSchema } from "@/lib/validations/organization";
 import { getAuthUser } from "../utils.actions";
 import { OrgRole } from "@prisma/client";
 
-/**
- * Création d'une organisation
- */
-export async function createOrganization(prevState: any, formData: FormData) {
+export type FormState = {
+  success?: boolean;
+  message: string;
+  errors?: {
+    name?: string[];
+    slug?: string[];
+    type?: string[];
+    logoUrl?: string[];
+    ownerId?: string[];
+  };
+};
+
+export async function createOrganization(prevState: FormState, formData: FormData): Promise<FormState> {
+  // 1. Authentification
   const user = await getAuthUser();
-
-  const validated = OrganizationSchema.safeParse(
-    Object.fromEntries(formData.entries())
-  );
-
-  if (!validated.success) {
+  void prevState;
+  if (!user || !user.id) {
     return {
       success: false,
-      errors: validated.error.flatten().fieldErrors
+      message: "Session expirée ou utilisateur introuvable. Veuillez vous reconnecter."
     };
   }
 
-  try {
-    const { name, slug, type, logoUrl } = validated.data;
+  // 2. Préparation des données pour Zod
+  // On récupère les champs du formulaire et on injecte l'ownerId manuellement
+  const rawData = Object.fromEntries(formData.entries());
+  const dataToValidate = {
+    ...rawData,
+    ownerId: user.id, // Correction : On injecte l'ID que Zod attend
+  };
 
+  // 3. Validation Zod
+  const validated = OrganizationSchema.safeParse(dataToValidate);
+
+  if (!validated.success) {
+    console.error("❌ Erreur de validation Zod:", validated.error.flatten().fieldErrors);
+    return {
+      success: false,
+      message: "Certains champs sont invalides.",
+      errors: validated.error.flatten().fieldErrors,
+    };
+  }
+
+  // 4. Extraction des données validées
+  const { name, slug, type, logoUrl, ownerId } = validated.data;
+
+  try {
+    // 5. Création dans la base de données
     await prisma.organization.create({
       data: {
         name,
         slug,
         type,
         logoUrl: logoUrl || null,
-        ownerId: user.id, // Correspond à ton @map("owner_id")
+        ownerId: ownerId, // Utilise l'ID validé par Zod
         members: {
           create: {
-            userId: user.id, // Correspond à ton @map("user_id")
+            userId: user.id,
             role: OrgRole.OWNER,
           },
         },
       },
     });
-  } catch (error: any) {
-    if (error.code === "P2002") {
-      return { success: false, message: "Ce slug est déjà utilisé." };
+
+    console.log(`✅ Organisation "${name}" créée avec succès.`);
+
+  } catch (error: unknown) {
+    console.error("❌ Erreur Prisma lors de la création:", error);
+    const code = typeof error === "object" && error !== null && "code" in error
+      ? String((error as { code?: unknown }).code)
+      : undefined;
+
+    // Gestion du doublon de Slug (Unique constraint)
+    if (code === "P2002") {
+      return {
+        success: false,
+        message: "Cette URL (slug) est déjà utilisée. Choisissez-en une autre.",
+        errors: { slug: ["Ce lien est déjà pris."] }
+      };
     }
-    return { success: false, message: "Erreur lors de la création." };
+
+    return {
+      success: false,
+      message: "Une erreur technique est survenue lors de la sauvegarde."
+    };
   }
 
-  revalidatePath("/dashboard");
-  redirect(`/dashboard/org/${validated.data.slug}`);
-}
+  // 6. Redirection et Revalidation (Hors du bloc try/catch)
+  // On revalide le layout du dashboard pour afficher la nouvelle organisation
+  revalidatePath("/dashboard", "layout");
 
-/**
- * Ajout d'un membre
- */
-export async function addMember(organizationId: string, targetUserId: string, role: OrgRole = OrgRole.MEMBER) {
-  const user = await getAuthUser();
-
-  // Sécurité : Seul ADMIN ou OWNER peut ajouter
-  const requester = await prisma.organizationMember.findUnique({
-    where: { organizationId_userId: { organizationId, userId: user.id } }
-  });
-
-  if (!requester || (requester.role !== OrgRole.OWNER && requester.role !== OrgRole.ADMIN)) {
-    return { error: "Permissions insuffisantes" };
-  }
-
-  try {
-    const member = await prisma.organizationMember.create({
-      data: { organizationId, userId: targetUserId, role }
-    });
-    revalidatePath(`/dashboard/org`);
-    return { success: true, member };
-  } catch (e) {
-    return { error: "L'utilisateur est déjà membre" };
-  }
+  // Redirection vers la page de l'organisation créée
+  redirect(`/dashboard/org/${slug}`);
 }

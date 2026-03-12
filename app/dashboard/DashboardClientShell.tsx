@@ -1,13 +1,22 @@
 "use client"
 
-import { useState, useEffect, use, createContext, useContext } from "react"
-import { NavigationItem, Role, type NavigationItem as PrismaNavItem } from "@prisma/client";
-import { NavigationContext } from "@prisma/client"; // ✅ Ajoute cette ligne
+import { useState, useEffect } from "react"
+import { NavigationItem, type NavigationItem as PrismaNavItem } from "@prisma/client";
 import { Icon, Icons } from "@/components/dashboard/icons";
-import { Sidebar } from "@/components/dashboard/Sidebar";
+import { Sidebar } from "@/components/dashboard/sidebar/Sidebar";
 import { Topbar } from "@/components/dashboard/Topbar";
 import { getUserOrganizations } from "@/lib/actions/organization/organization.queries";
 import { UserProvider } from "@/components/Provider";
+
+type NotificationItem = {
+  id: string;
+  type: "match" | "member" | "tournament";
+  message: string;
+  time: string;
+  read: boolean;
+};
+
+type UserOrganizationList = Awaited<ReturnType<typeof getUserOrganizations>>;
 
 // On définit la structure de l'utilisateur
 interface UserData {
@@ -15,6 +24,7 @@ interface UserData {
   email: string | undefined;
   avatar: string | null;
   roles: string[];
+  role: "ADMIN" | "USER";
 }
 
 // ── Layout Principal ──────────────────────────────────────────────────────────
@@ -31,16 +41,12 @@ export default function DashboardClientShell({
   const NAV_ITEMS: NavigationItem[] = navItems;
 
   // INITS
-  const [collapsed, setCollapsed] = useState(false)
-  const [activeOrg, setActiveOrg] = useState([])
-  const [activeNav, setActiveNav] = useState("/dashboard")
-  const [showNotifs, setShowNotifs] = useState(false)
-  const [showOrgMenu, setShowOrgMenu] = useState(false)
+  const [collapsed] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
-  const [notifs, setNotifs] = useState([])
+  const [notifs, setNotifs] = useState<NotificationItem[]>([])
   const [mounted, setMounted] = useState(false)
-  const [organizations, setOrganizations] = useState([])
+  const [organizations, setOrganizations] = useState<UserOrganizationList>([])
 
 
   useEffect(() => {
@@ -57,7 +63,6 @@ export default function DashboardClientShell({
     fetchOrgs();
   }, [])
 
-  const unreadCount = notifs.filter(n => !n.read).length
   const W_OPEN = 240
   const W_CLOSED = 64
 
@@ -72,7 +77,6 @@ export default function DashboardClientShell({
         <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=DM+Sans:wght@300;400;500&display=swap');
 
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
         :root {
           --bg:        #080b10;
@@ -282,7 +286,7 @@ export default function DashboardClientShell({
           {/* ════════════════════════════════════════
             SIDEBAR
         ════════════════════════════════════════ */}
-          <Sidebar user={user} navItems={NAV_ITEMS} activeNav={activeNav} setActiveNav={setActiveNav} organizations={organizations} />
+          <Sidebar user={user} navItems={NAV_ITEMS} organizations={organizations} />
 
 
           {/* ════════════════════════════════════════
@@ -294,8 +298,7 @@ export default function DashboardClientShell({
             <Topbar user={user} notifications={notifs} onMarkAllRead={markAllRead} onSearchClick={() => setShowSearch(true)} />
 
             {/* Content */}
-            <main className="hub-content"
-              onClick={() => { setShowNotifs(false); setShowOrgMenu(false) }}>
+            <main className="hub-content">
 
               {children}
             </main>

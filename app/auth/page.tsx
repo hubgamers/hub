@@ -2,14 +2,15 @@
 import React, { useState } from 'react';
 import { Chrome, Disc, ArrowRight, Mail, Lock, User } from 'lucide-react';
 import { createClient } from '@/lib/supabase/client';
+import type { Provider } from '@supabase/supabase-js';
 
 const SaaSAuth = () => {
   const [isLogin, setIsLogin] = useState(true);
   const supabase = createClient(); // On initialise le client une fois
 
   // Fonction générique pour OAuth (Google & Discord)
-  const handleOAuthSignIn = async (provider) => {
-    const { data, error } = await supabase.auth.signInWithOAuth({
+  const handleOAuthSignIn = async (provider: Provider) => {
+    const { error } = await supabase.auth.signInWithOAuth({
       provider: provider,
       options: {
         redirectTo: `${window.location.origin}/api/auth/callback`, // Important pour la redirection

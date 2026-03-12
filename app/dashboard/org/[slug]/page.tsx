@@ -6,14 +6,16 @@ import { useEffect, useState } from "react";
 
 // Mock des icônes et composants manquants dans ton snippet pour que ça compile
 const Icons = { trophy: "", teams: "", players: "", flame: "" };
-const Icon = ({ d, size }: { d: string, size: number }) => <span style={{ fontSize: size }}>⚡</span>;
+const Icon = ({ d, size }: { d: string, size: number }) => <span style={{ fontSize: size }} data-icon={d}>⚡</span>;
+
+type OrganizationSummary = Awaited<ReturnType<typeof getOrganizationBySlug>>;
 
 export default function OrganizationPageResume() {
   const params = useParams();
   const slug = params.slug;
-  const user = useUser;
+  const user = useUser();
 
-  const [activeOrg, setActiveOrg] = useState<any>(null);
+  const [activeOrg, setActiveOrg] = useState<OrganizationSummary | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -22,7 +24,7 @@ export default function OrganizationPageResume() {
     const fetchOrg = async () => {
       try {
         const data = await getOrganizationBySlug(slug as string);
-        setActiveOrg(data);
+        setActiveOrg(data ?? null);
       } catch (error) {
         console.error("Erreur:", error);
       } finally {
@@ -37,7 +39,7 @@ export default function OrganizationPageResume() {
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", color: "var(--muted)" }}>
-        <p style={{ fontFamily: "Syne, sans-serif", fontWeight: 600 }}>Chargement de l'organisation...</p>
+        <p style={{ fontFamily: "Syne, sans-serif", fontWeight: 600 }}>Chargement de l&apos;organisation...</p>
       </div>
     );
   }
@@ -59,19 +61,19 @@ export default function OrganizationPageResume() {
           <span style={{ fontSize: 11, color: "var(--muted)", fontWeight: 500 }}>
             {activeOrg.name}
           </span>
-          <span style={{ color: "var(--border2)" }}>›</span>
+          <span style={{ color: "var(--border2)" }}>{">"}</span>
           <span style={{ fontSize: 11, color: "var(--accent)", fontWeight: 500 }}>
-            Vue d'ensemble
+            Vue d&apos;ensemble
           </span>
         </div>
         <h1 style={{
           fontFamily: "Syne, sans-serif", fontWeight: 800,
           fontSize: 26, letterSpacing: "-0.03em", color: "var(--text)",
         }}>
-          Bonjour, {user?.name || "Utilisateur"} 👋
+          Bonjour, {user?.user.name || "Utilisateur"} 👋
         </h1>
         <p style={{ color: "var(--muted)", fontSize: 14, marginTop: 4 }}>
-          Voici ce qui se passe dans {activeOrg.name} aujourd'hui.
+          Voici ce qui se passe dans {activeOrg.name} aujourd&apos;hui.
         </p>
       </div>
 
@@ -129,7 +131,7 @@ export default function OrganizationPageResume() {
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {[
-              { team: "Thunder A", score: "2 — 1", opp: "Shadow Force", time: "Aujourd'hui, 18h30", status: "win" },
+              { team: "Thunder A", score: "2 — 1", opp: "Shadow Force", time: "Aujourd&apos;hui, 18h30", status: "win" },
               { team: "Thunder B", score: "0 — 3", opp: "Neon Wolves", time: "Hier, 20h00", status: "loss" },
               { team: "Thunder A", score: "—", opp: "Storm Team", time: "Demain, 19h00", status: "upcoming" },
             ].map((m, i) => (

@@ -1,13 +1,28 @@
 "use client";
 
 import { createContext, useContext, useState, ReactNode } from "react";
+import type { NavigationItem, Organization } from "@prisma/client";
+
+type UserRole = "ADMIN" | "USER";
+
+type UserData = {
+    name: string;
+    email?: string;
+    avatar?: string | null;
+    roles?: string[];
+    role: UserRole;
+};
+
+type NavigationTreeItem = NavigationItem & {
+    children: NavigationItem[];
+};
 
 interface UserContextType {
-    user: any;
-    navItems: any[];
-    organizations: any[];
-    activeOrg: any;
-    setActiveOrg: (org: any) => void; // Pour changer d'org depuis n'importe quelle page
+    user: UserData;
+    navItems: NavigationTreeItem[];
+    organizations: Organization[];
+    activeOrg: Organization | null;
+    setActiveOrg: (org: Organization | null) => void;
 }
 
 const UserContext = createContext<UserContextType | null>(null);
@@ -17,10 +32,9 @@ export function UserProvider({
     initialData,
 }: {
     children: ReactNode;
-    initialData: { user: any; navItems: any[]; organizations: any[] };
+    initialData: { user: UserData; navItems: NavigationTreeItem[]; organizations: Organization[] };
 }) {
-    // On initialise l'org active avec la première de la liste
-    const [activeOrg, setActiveOrg] = useState(initialData.organizations[0] || null);
+    const [activeOrg, setActiveOrg] = useState<Organization | null>(initialData.organizations[0] || null);
 
     return (
         <UserContext.Provider

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { getUserOrganizations } from "@/lib/actions/organization/organization.queries";
 import { Building2, Plus, ArrowRight } from "lucide-react";
 import Link from "next/link";
+import Image from "next/image";
 
 // On définit le type basé sur ton modèle Prisma
 interface Organization {
@@ -55,7 +56,7 @@ export default function OrganizationList() {
             {orgs.length === 0 ? (
                 <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-white/10 p-12 text-center">
                     <Building2 className="mb-4 text-white/20" size={48} />
-                    <p className="text-white/60">Vous ne faites partie d'aucune organisation.</p>
+                    <p className="text-white/60">Vous ne faites partie d&apos;aucune organisation.</p>
                 </div>
             ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -68,7 +69,14 @@ export default function OrganizationList() {
                             <div className="flex items-center gap-4">
                                 <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-indigo-500/20 text-indigo-400">
                                     {org.logoUrl ? (
-                                        <img src={org.logoUrl} alt={org.name} className="h-full w-full rounded-lg object-cover" />
+                                        <Image
+                                            src={org.logoUrl}
+                                            alt={org.name}
+                                            width={48}
+                                            height={48}
+                                            unoptimized
+                                            className="h-full w-full rounded-lg object-cover"
+                                        />
                                     ) : (
                                         <Building2 size={24} />
                                     )}

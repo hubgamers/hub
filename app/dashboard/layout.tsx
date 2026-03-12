@@ -48,7 +48,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     name: dbUser?.display_name || authUser.user_metadata.full_name || "Utilisateur",
     email: authUser.email,
     avatar: dbUser?.avatar_url || authUser.user_metadata.avatar_url,
-    roles: dbUser?.roles || [] // On récupère le tableau d'enums de Prisma
+    roles: dbUser?.roles || [], // On récupère le tableau d'enums de Prisma
+    role: isAdmin ? "ADMIN" as const : "USER" as const,
   };
 
   return (

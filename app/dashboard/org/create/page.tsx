@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
-import { createOrganization } from "@/lib/actions/organization/organization.actions";
+import { useActionState, useState, type ChangeEvent } from "react";
+import { createOrganization, type FormState } from "@/lib/actions/organization/organization.actions";
 import {
     FormButton,
     FormContainer,
@@ -14,96 +14,127 @@ import {
     Trophy,
     Type,
     Link as LinkIcon,
-    ImageIcon
+    ImageIcon,
+    Fingerprint,
+    Globe
 } from "lucide-react";
 import { OrgType } from "@prisma/client";
 
+const slugify = (value: string) =>
+    value
+        .toLowerCase()
+        .trim()
+        .replace(/[^\w\s-]/g, "")
+        .replace(/[\s_-]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
 export default function CreateOrganisationPage() {
-    // Initialisation du hook useActionState avec ton action serveur
     const [state, formAction, isPending] = useActionState(createOrganization, {
+        success: false,
         message: "",
         errors: {}
-    });
+    } as FormState);
 
-    // États locaux pour la gestion dynamique du slug
     const [name, setName] = useState("");
     const [slug, setSlug] = useState("");
+    const [slugEdited, setSlugEdited] = useState(false);
 
-    // Génère automatiquement un slug à partir du nom
-    useEffect(() => {
-        const generatedSlug = name
-            .toLowerCase()
-            .trim()
-            .replace(/[^\w\s-]/g, "") // Enlever les caractères spéciaux
-            .replace(/[\s_-]+/g, "-") // Remplacer les espaces et underscores par des tirets
-            .replace(/^-+|-+$/g, ""); // Nettoyer les tirets aux extrémités
-        setSlug(generatedSlug);
-    }, [name]);
+    const handleNameChange = (e: ChangeEvent<HTMLInputElement>) => {
+        const nextName = e.target.value;
+        setName(nextName);
+        if (!slugEdited) {
+            setSlug(slugify(nextName));
+        }
+    };
 
-    // Transformation de l'enum Prisma OrgType en options pour le select
-    // On transforme ["SPORT", "ESPORT", ...] en [{value: "SPORT", label: "Sport"}, ...]
+    const handleSlugChange = (e: ChangeEvent<HTMLInputElement>) => {
+        setSlug(e.target.value);
+        setSlugEdited(true);
+    };
+
     const typeOptions = Object.values(OrgType).map((type) => ({
         value: type,
         label: type.charAt(0) + type.slice(1).toLowerCase(),
     }));
 
     return (
-        <div className="min-h-screen bg-[#05070a] flex items-center justify-center p-6">
+        <div className="min-h-screen bg-[#05070a] flex items-center justify-center p-4">
             <FormContainer
                 title="Configuration"
-                subtitle="Créez votre espace de compétition"
+                subtitle="Paramétrez l'identité de votre structure"
                 action={formAction}
             >
-                {/* Nom de l'organisation */}
-                <FormField
-                    label="Nom de l'organisation"
-                    icon={Trophy}
-                    name="name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="ex: Vortex Esport"
-                    error={state?.errors?.name}
-                    required
-                />
+                <div className="space-y-8">
+                    {/* SECTION 1 : NOM & TYPE */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <FormField
+                            label="Nom de l'organisation"
+                            icon={Trophy}
+                            name="name"
+                            value={name}
+                            onChange={handleNameChange}
+                            placeholder="ex: Vortex Esport"
+                            error={state?.errors?.name}
+                            required
+                        />
 
-                {/* Slug (ID unique dans l'URL) */}
-                <FormField
-                    label="Slug (URL unique)"
-                    icon={LinkIcon}
-                    name="slug"
-                    value={slug}
-                    onChange={(e) => setSlug(e.target.value)}
-                    placeholder="vortex-esport"
-                    error={state?.errors?.slug}
-                    required
-                />
+                        <FormSelect
+                            label="Type de structure"
+                            icon={Type}
+                            name="type"
+                            options={typeOptions}
+                            defaultValue={OrgType.ESPORT}
+                            error={state?.errors?.type}
+                        />
+                    </div>
 
-                {/* Type d'organisation (Enum Prisma) */}
-                <FormSelect
-                    label="Type de structure"
-                    icon={Type}
-                    name="type"
-                    options={typeOptions}
-                    defaultValue={OrgType.ESPORT} // Défaut sur Esport
-                    error={state?.errors?.type}
-                />
+                    {/* SECTION 2 : SLUG */}
+                    <div className="relative group">
+                        <div className="absolute -inset-2 bg-gradient-to-r from-indigo-500/10 to-transparent rounded-2xl opacity-0 group-focus-within:opacity-100 transition-opacity" />
+                        <div className="relative p-5 rounded-2xl bg-slate-900/40 border border-slate-800/50 space-y-4">
+                            <div className="flex items-center gap-2 text-indigo-400">
+                                <Fingerprint size={16} className="animate-pulse" />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Identifiant Unique</span>
+                            </div>
 
-                {/* URL du Logo */}
-                <FormField
-                    label="URL du Logo"
-                    icon={ImageIcon}
-                    name="logoUrl"
-                    placeholder="https://imgur.com/votre-logo.png"
-                    error={state?.errors?.logoUrl}
-                />
+                            <FormField
+                                label="URL personnalisée (Slug)"
+                                icon={LinkIcon}
+                                name="slug"
+                                value={slug}
+                                onChange={handleSlugChange}
+                                placeholder="vortex-esport"
+                                error={state?.errors?.slug}
+                                required
+                            />
 
-                {/* Message d'erreur global ou succès */}
-                <FormStatus state={state} />
+                            <div className="flex items-center gap-2 px-1 text-slate-500">
+                                <Globe size={12} />
+                                <p className="text-[10px] font-medium italic">
+                                    Aperçu : <span className="text-indigo-400/80 underline decoration-indigo-500/20 underline-offset-4 tracking-tight">app.tournoi.com/org/{slug || "..."}</span>
+                                </p>
+                            </div>
+                        </div>
+                    </div>
 
-                {/* Bouton de soumission */}
-                <FormButton isPending={isPending} icon={Send}>
-                    Créer l'organisation
-                </FormButton>
+                    {/* SECTION 3 : LOGO */}
+                    <FormField
+                        label="Lien du logo"
+                        icon={ImageIcon}
+                        name="logoUrl"
+                        placeholder="https://image.com/logo.png"
+                        error={state?.errors?.logoUrl}
+                    />
+
+                    {/* ACTIONS */}
+                    <div className="pt-4 border-t border-slate-800/50 space-y-4">
+                        <FormStatus state={state} />
+
+                        <FormButton isPending={isPending} icon={Send}>
+                            Lancer la structure
+                        </FormButton>
+                    </div>
+                </div>
             </FormContainer>
         </div>
     );
