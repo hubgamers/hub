@@ -126,9 +126,9 @@ export default function GroupPlacementBoard({
                 </div>
             )}
 
-            <div className="rounded-md border border-slate-800 bg-slate-900/50 p-2">
+            <div className="sticky top-3 z-20 rounded-md border border-slate-800 bg-slate-900/90 p-2 backdrop-blur">
                 <p className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">Equipes non placees</p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto pr-1">
                     {unassignedTeams.length === 0 ? (
                         <span className="text-xs text-slate-500">Toutes les equipes sont placees.</span>
                     ) : (

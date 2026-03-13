@@ -131,11 +131,28 @@ model Tournament {
   phases         Phase[]
   pitches        Pitch[]
   registrations  TournamentRegistration[]
+  actionLogs     TournamentActionLog[]
   game           Game                     @relation(fields: [gameId], references: [id])
   organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@unique([organizationId, slug])
   @@map("tournaments")
+  @@schema("public")
+}
+
+model TournamentActionLog {
+  id           String     @id @default(uuid())
+  tournamentId String     @map("tournament_id")
+  actionType   String     @map("action_type")
+  message      String
+  payload      Json?
+  actorId      String?    @map("actor_id")
+  actorName    String?    @map("actor_name")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@index([tournamentId, createdAt])
+  @@map("tournament_action_logs")
   @@schema("public")
 }
 

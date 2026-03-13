@@ -9,6 +9,8 @@ import {
     configureGroupPhase,
     createTournamentMatch,
     createTournamentPitch,
+    deleteAllTournamentMatches,
+    deleteSelectedTournamentMatches,
     deleteTournamentMatch,
     deleteTournamentPitch,
     generateCustomPlacementBracketMatches,
@@ -18,7 +20,10 @@ import {
 } from '@/lib/actions/tournament-management.actions'
 import GroupPlacementBoard from './GroupPlacementBoard'
 import MatchBulkEditor from './MatchBulkEditor'
+import MatchBulkCreateForm from './MatchBulkCreateForm'
 import BracketPhaseView from './BracketPhaseView'
+import BracketSeedEditor from './BracketSeedEditor'
+import PhaseFlowEditor from './PhaseFlowEditor'
 
 // Next.js server actions can return arbitrary values, but the React HTML form
 // `action` prop typing requires `void | Promise<void>`. This wrapper silences
@@ -30,7 +35,7 @@ function va<T extends (fd: FormData) => Promise<any>>(action: T) {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type TabId = 'overview' | 'phases' | 'registrations' | 'pools' | 'bracket' | 'matches'
+type TabId = 'overview' | 'phases' | 'registrations' | 'pools' | 'bracket' | 'planning' | 'planning-time' | 'matches'
 
 type RouteConfig = {
     toPhaseKey?: string
@@ -98,6 +103,13 @@ type Props = {
         phases: PhaseData[]
         pitches: PitchData[]
         registrations: RegistrationData[]
+        actionLogs: Array<{
+            id: string
+            actionType: string
+            message: string
+            actorName: string | null
+            createdAt: string
+        }>
         _count: { registrations: number }
     }
     availableTeams: Array<{ id: string; name: string; slug: string }>
@@ -111,6 +123,14 @@ function readRoutes(config: unknown): RouteConfig[] {
     const routes = (config as { routes?: unknown }).routes
     if (!Array.isArray(routes)) return []
     return routes.filter((r) => r && typeof r === 'object') as RouteConfig[]
+}
+
+function readParallelGroup(config: unknown) {
+    if (!config || typeof config !== 'object') return null
+    const raw = (config as { parallelGroup?: unknown }).parallelGroup
+    if (typeof raw !== 'string') return null
+    const value = raw.trim()
+    return value.length > 0 ? value : null
 }
 
 function formatRouteRule(route: RouteConfig) {
@@ -265,6 +285,8 @@ function PhaseTypeBadge({ type }: { type: string }) {
 
 export default function TournamentTabShell({ orgSlug, tournament, availableTeams, matches }: Props) {
     const [activeTab, setActiveTab] = useState<TabId>('overview')
+    const [matchCreateMode, setMatchCreateMode] = useState<'single' | 'bulk'>('single')
+    const [selectedMatchIds, setSelectedMatchIds] = useState<string[]>([])
 
     const bracketPhases = tournament.phases.filter((p) =>
         ['BRACKET_SINGLE', 'BRACKET_DOUBLE', 'PLACEMENT_BRACKET', 'CUSTOM'].includes(p.type)
@@ -288,16 +310,252 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
         [tournament.registrations]
     )
 
+    const seededTeamsByPhase = useMemo(() => {
+        const map = new Map<string, string[]>()
+        for (const phase of tournament.phases) {
+            const ids = matches
+                .filter((m) => m.phaseId === phase.id)
+                .flatMap((m) => [m.homeTeamId, m.awayTeamId])
+                .filter((id): id is string => Boolean(id))
+            map.set(phase.id, [...new Set(ids)])
+        }
+        return map
+    }, [matches, tournament.phases])
+
+    const incomingQualifiersByPhase = useMemo(() => {
+        const map = new Map<string, string[]>()
+
+        for (const sourcePhase of tournament.phases) {
+            if (!sourcePhase.isCompleted) continue
+
+            const routes = readRoutes(sourcePhase.config)
+                .filter((route) => typeof route.toPhaseId === 'string' && route.toPhaseId)
+
+            if (routes.length === 0) continue
+
+            let orderedQualifiedIds: string[] = []
+
+            if (sourcePhase.type === 'GROUP') {
+                const groupConfig = readGroupConfig(sourcePhase.config)
+                const standingsByGroup = Array.from({ length: groupConfig.count }, (_, idx) => {
+                    const groupIndex = idx + 1
+                    return computeGroupStandings(groupIndex, groupConfig, sourcePhase.id, matches, teamNameById)
+                        .map((row) => row.teamId)
+                })
+
+                for (const route of routes) {
+                    const routeIds: string[] = []
+                    if (route.rule === 'TOP' && route.countPerGroup) {
+                        for (let rank = 0; rank < route.countPerGroup; rank += 1) {
+                            for (const groupRows of standingsByGroup) {
+                                const teamId = groupRows[rank]
+                                if (teamId) routeIds.push(teamId)
+                            }
+                        }
+                    } else if (route.rule === 'BOTTOM' && route.countPerGroup) {
+                        for (let rank = 0; rank < route.countPerGroup; rank += 1) {
+                            for (const groupRows of standingsByGroup) {
+                                const idx = groupRows.length - 1 - rank
+                                const teamId = idx >= 0 ? groupRows[idx] : undefined
+                                if (teamId) routeIds.push(teamId)
+                            }
+                        }
+                    } else if (route.rule === 'RANGE' && route.startRank && route.endRank) {
+                        for (let rank = route.startRank - 1; rank < route.endRank; rank += 1) {
+                            for (const groupRows of standingsByGroup) {
+                                const teamId = groupRows[rank]
+                                if (teamId) routeIds.push(teamId)
+                            }
+                        }
+                    }
+
+                    if (route.toPhaseId) {
+                        const existing = map.get(route.toPhaseId) ?? []
+                        map.set(route.toPhaseId, [...new Set([...existing, ...routeIds])])
+                    }
+
+                    orderedQualifiedIds = [...new Set([...orderedQualifiedIds, ...routeIds])]
+                }
+            } else {
+                const winners = matches
+                    .filter((m) => m.phaseId === sourcePhase.id && m.status === 'FINISHED' && Boolean(m.result))
+                    .sort((a, b) => {
+                        const roundA = a.roundNumber ?? 0
+                        const roundB = b.roundNumber ?? 0
+                        if (roundA !== roundB) return roundB - roundA
+                        return (a.bracketPos ?? '').localeCompare(b.bracketPos ?? '')
+                    })
+                    .map((m) => {
+                        if (!m.result || !m.homeTeamId || !m.awayTeamId) return null
+                        return m.result.homeScore >= m.result.awayScore ? m.homeTeamId : m.awayTeamId
+                    })
+                    .filter((id): id is string => Boolean(id))
+
+                orderedQualifiedIds = [...new Set(winners)]
+
+                for (const route of routes) {
+                    if (!route.toPhaseId) continue
+                    const existing = map.get(route.toPhaseId) ?? []
+                    map.set(route.toPhaseId, [...new Set([...existing, ...orderedQualifiedIds])])
+                }
+            }
+        }
+
+        return map
+    }, [matches, teamNameById, tournament.phases])
+
+    const scheduleByPitch = useMemo(() => {
+        const byPitch = new Map<string, Map<number, SerializedMatch[]>>()
+        const unscheduledByPitch = new Map<string, SerializedMatch[]>()
+
+        for (const match of matches) {
+            const pitchName = match.pitch.name
+            if (!match.scheduledAt) {
+                const bucket = unscheduledByPitch.get(pitchName) ?? []
+                bucket.push(match)
+                unscheduledByPitch.set(pitchName, bucket)
+                continue
+            }
+
+            const parsed = new Date(match.scheduledAt)
+            if (Number.isNaN(parsed.getTime())) {
+                const bucket = unscheduledByPitch.get(pitchName) ?? []
+                bucket.push(match)
+                unscheduledByPitch.set(pitchName, bucket)
+                continue
+            }
+
+            const slotStart = parsed.getTime()
+            const pitchMap = byPitch.get(pitchName) ?? new Map<number, SerializedMatch[]>()
+            const slotMatches = pitchMap.get(slotStart) ?? []
+            slotMatches.push(match)
+            pitchMap.set(slotStart, slotMatches)
+            byPitch.set(pitchName, pitchMap)
+        }
+
+        const pitchNames = [...new Set([...tournament.pitches.map((pitch) => pitch.name), ...matches.map((m) => m.pitch.name)])]
+            .sort((a, b) => a.localeCompare(b))
+
+        return pitchNames.map((pitchName) => {
+            const pitchSlots = byPitch.get(pitchName) ?? new Map<number, SerializedMatch[]>()
+            const slots = [...pitchSlots.entries()]
+                .sort((a, b) => a[0] - b[0])
+                .map(([slotStart, slotMatches]) => {
+                    const startDate = new Date(slotStart)
+                    const label = startDate.toLocaleString('fr-FR', {
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                    })
+                    return {
+                        slotStart,
+                        label,
+                        matches: [...slotMatches].sort((a, b) => {
+                            const aTime = a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0
+                            const bTime = b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0
+                            return aTime - bTime
+                        }),
+                    }
+                })
+
+            const unscheduled = (unscheduledByPitch.get(pitchName) ?? []).sort((a, b) => a.phase.name.localeCompare(b.phase.name))
+
+            return {
+                pitchName,
+                slots,
+                unscheduled,
+            }
+        })
+    }, [matches, tournament.pitches])
+
+    const scheduleByTime = useMemo(() => {
+        const byTime = new Map<number, SerializedMatch[]>()
+        const unscheduled: SerializedMatch[] = []
+
+        for (const match of matches) {
+            if (!match.scheduledAt) {
+                unscheduled.push(match)
+                continue
+            }
+
+            const parsed = new Date(match.scheduledAt)
+            if (Number.isNaN(parsed.getTime())) {
+                unscheduled.push(match)
+                continue
+            }
+
+            const at = parsed.getTime()
+            const bucket = byTime.get(at) ?? []
+            bucket.push(match)
+            byTime.set(at, bucket)
+        }
+
+        const slots = [...byTime.entries()]
+            .sort((a, b) => a[0] - b[0])
+            .map(([at, slotMatches]) => ({
+                at,
+                label: new Date(at).toLocaleString('fr-FR', {
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                }),
+                matches: [...slotMatches].sort((a, b) => {
+                    const pitchCmp = a.pitch.name.localeCompare(b.pitch.name)
+                    if (pitchCmp !== 0) return pitchCmp
+                    return a.phase.name.localeCompare(b.phase.name)
+                }),
+            }))
+
+        return {
+            slots,
+            unscheduled: unscheduled.sort((a, b) => a.pitch.name.localeCompare(b.pitch.name)),
+        }
+    }, [matches])
+
     const tabs = [
         { id: 'overview' as TabId, label: "Vue d'ensemble" },
         { id: 'phases' as TabId, label: 'Phases', badge: tournament.phases.length },
         { id: 'registrations' as TabId, label: 'Inscriptions & Pistes', badge: tournament.registrations.length },
         ...(groupPhases.length > 0 ? [{ id: 'pools' as TabId, label: 'Poules', badge: groupPhases.length }] : []),
         ...(bracketPhases.length > 0 ? [{ id: 'bracket' as TabId, label: 'Bracket', badge: bracketPhases.length }] : []),
+        { id: 'planning' as TabId, label: 'Planning pistes', badge: matches.filter((m) => Boolean(m.scheduledAt)).length },
+        { id: 'planning-time' as TabId, label: 'Planning par horaire', badge: scheduleByTime.slots.length },
         { id: 'matches' as TabId, label: 'Matchs', badge: matches.length },
     ]
 
     const statusMeta = STATUS_META[tournament.status] ?? { label: tournament.status, cls: 'bg-slate-700 text-slate-300' }
+    const allVisibleMatchIds = useMemo(() => matches.map((m) => m.id), [matches])
+    const matchIdsByStatus = useMemo(() => {
+        const map = new Map<string, string[]>()
+        for (const match of matches) {
+            const bucket = map.get(match.status) ?? []
+            bucket.push(match.id)
+            map.set(match.status, bucket)
+        }
+        return map
+    }, [matches])
+    const selectedSet = useMemo(() => new Set(selectedMatchIds), [selectedMatchIds])
+    const selectedCount = selectedMatchIds.length
+    const allSelected = allVisibleMatchIds.length > 0 && allVisibleMatchIds.every((id) => selectedSet.has(id))
+
+    const toggleSelectStatus = (status: string) => {
+        const ids = matchIdsByStatus.get(status) ?? []
+        if (ids.length === 0) return
+        setSelectedMatchIds((prev) => {
+            const prevSet = new Set(prev)
+            const allStatusSelected = ids.every((id) => prevSet.has(id))
+            if (allStatusSelected) {
+                return prev.filter((id) => !ids.includes(id))
+            }
+            const merged = new Set(prev)
+            ids.forEach((id) => merged.add(id))
+            return Array.from(merged)
+        })
+    }
 
     const inputCls = 'rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500'
     const btnPrimary = 'rounded-lg bg-indigo-600 px-3 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors'
@@ -429,6 +687,7 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                         const stats = matchesByPhase.get(phase.id) ?? { total: 0, finished: 0 }
                                         const pct = stats.total > 0 ? Math.round((stats.finished / stats.total) * 100) : 0
                                         const routes = readRoutes(phase.config)
+                                        const parallelGroup = readParallelGroup(phase.config)
                                         return (
                                             <div key={phase.id} className="relative flex gap-4">
                                                 {/* Connector line */}
@@ -448,6 +707,11 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                     <div className="mb-2 flex items-center gap-2">
                                                         <p className="text-sm font-semibold">{phase.name}</p>
                                                         <PhaseTypeBadge type={phase.type} />
+                                                        {parallelGroup && (
+                                                            <span className="rounded-md border border-cyan-500/40 bg-cyan-600/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-cyan-300">
+                                                                Simultane: {parallelGroup}
+                                                            </span>
+                                                        )}
                                                         {phase.isCompleted && (
                                                             <span className="ml-auto text-[10px] font-semibold text-emerald-300">Terminee</span>
                                                         )}
@@ -478,12 +742,53 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                 </div>
                             </div>
                         )}
+
+                        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
+                            <div className="mb-3 flex items-center justify-between">
+                                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-400">Historique des actions</h2>
+                                <span className="text-[11px] text-slate-500">{tournament.actionLogs.length} entree(s)</span>
+                            </div>
+
+                            {tournament.actionLogs.length === 0 ? (
+                                <p className="text-xs text-slate-500">Aucune action enregistree pour le moment.</p>
+                            ) : (
+                                <div className="max-h-96 space-y-1 overflow-y-auto pr-1">
+                                    {tournament.actionLogs.map((log) => (
+                                        <div key={log.id} className="rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <p className="text-xs text-slate-200">{log.message}</p>
+                                                <span className="shrink-0 rounded-md bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-300">
+                                                    {log.actionType}
+                                                </span>
+                                            </div>
+                                            <p className="mt-1 text-[11px] text-slate-500">
+                                                {new Date(log.createdAt).toLocaleString('fr-FR')}
+                                                {log.actorName ? ` • ${log.actorName}` : ''}
+                                            </p>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 )}
 
                 {/* ── Phases ─────────────────────────────────────────────────────── */}
                 {activeTab === 'phases' && (
                     <div className="space-y-4">
+                        <PhaseFlowEditor
+                            tournamentId={tournament.id}
+                            tournamentSlug={tournament.slug}
+                            orgSlug={orgSlug}
+                            phases={tournament.phases.map((phase) => ({
+                                id: phase.id,
+                                name: phase.name,
+                                type: phase.type,
+                                order: phase.order,
+                                config: phase.config,
+                            }))}
+                        />
+
                         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
                             <p className="font-semibold text-slate-200">Gestion du cycle de vie des phases</p>
                             <p className="mt-1">Cloturez chaque phase apres ses matchs pour propager les qualifies vers la phase suivante et mettre a jour le statut du tournoi. Utilisez <em>Forcer la cloture</em> si certains matchs ne sont pas termines.</p>
@@ -497,12 +802,19 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                     const stats = matchesByPhase.get(phase.id) ?? { total: 0, finished: 0 }
                                     const pct = stats.total > 0 ? Math.round((stats.finished / stats.total) * 100) : 0
                                     const routes = readRoutes(phase.config)
+                                    const parallelGroup = readParallelGroup(phase.config)
+                                    const seededTeams = seededTeamsByPhase.get(phase.id) ?? []
+                                    const incomingQualifiers = incomingQualifiersByPhase.get(phase.id) ?? []
+                                    const waitingQualifiers = incomingQualifiers.filter((teamId) => !seededTeams.includes(teamId))
                                     return (
                                         <div key={phase.id} className={`rounded-xl border p-4 ${phase.isCompleted ? 'border-emerald-500/30 bg-emerald-950/20' : 'border-slate-800 bg-slate-950/70'}`}>
                                             <div className="mb-3 flex items-start justify-between gap-2">
                                                 <div>
                                                     <span className="text-[10px] uppercase tracking-widest text-slate-500">Etape {phase.order}</span>
                                                     <p className="text-base font-bold leading-tight">{phase.name}</p>
+                                                    {parallelGroup && (
+                                                        <p className="mt-1 text-[11px] text-cyan-300">Groupe parallele: {parallelGroup}</p>
+                                                    )}
                                                 </div>
                                                 <PhaseTypeBadge type={phase.type} />
                                             </div>
@@ -531,6 +843,35 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                             <span className="ml-1 text-slate-500">→ {route.toPhaseKey || 'inconnue'}{route.label ? ` (${route.label})` : ''}</span>
                                                         </div>
                                                     ))}
+                                                </div>
+                                            )}
+
+                                            {(seededTeams.length > 0 || waitingQualifiers.length > 0) && (
+                                                <div className="mb-3 space-y-2 rounded-lg border border-indigo-500/30 bg-indigo-950/20 p-2">
+                                                    {seededTeams.length > 0 && (
+                                                        <div>
+                                                            <p className="text-[10px] uppercase tracking-wider text-indigo-300">Equipes placees sur cette phase</p>
+                                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                                {seededTeams.map((teamId) => (
+                                                                    <span key={`${phase.id}-seeded-${teamId}`} className="rounded-md bg-slate-800 px-2 py-0.5 text-[11px] text-slate-200">
+                                                                        {teamNameById.get(teamId) ?? teamId}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {waitingQualifiers.length > 0 && (
+                                                        <div>
+                                                            <p className="text-[10px] uppercase tracking-wider text-amber-300">Qualifiees detectees (a placer)</p>
+                                                            <div className="mt-1 flex flex-wrap gap-1">
+                                                                {waitingQualifiers.map((teamId) => (
+                                                                    <span key={`${phase.id}-incoming-${teamId}`} className="rounded-md bg-amber-600/20 px-2 py-0.5 text-[11px] text-amber-200">
+                                                                        {teamNameById.get(teamId) ?? teamId}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
                                                 </div>
                                             )}
 
@@ -577,12 +918,20 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                     <input type="hidden" name="tournamentId" value={tournament.id} />
                                     <input type="hidden" name="orgSlug" value={orgSlug} />
                                     <input type="hidden" name="tournamentSlug" value={tournament.slug} />
-                                    <select name="teamId" className={`${inputCls} md:col-span-2`} required defaultValue="">
-                                        <option value="" disabled>Selectionner une equipe</option>
+                                    <select
+                                        name="teamIds"
+                                        className={`${inputCls} md:col-span-2 min-h-40`}
+                                        required
+                                        multiple
+                                        size={Math.min(10, Math.max(4, availableTeams.length))}
+                                    >
                                         {availableTeams.map((team) => (
                                             <option key={team.id} value={team.id}>{team.name}</option>
                                         ))}
                                     </select>
+                                    <p className="md:col-span-2 text-xs text-slate-500">
+                                        Multi-selection: maintenez Ctrl (Windows) ou Cmd (Mac), puis cliquez sur les equipes a inscrire.
+                                    </p>
                                     <input type="number" name="seed" min={1} placeholder="Seed (optionnel)" className={inputCls} />
                                     <label className={`flex cursor-pointer items-center gap-2 ${inputCls}`}>
                                         <input name="isConfirmed" type="checkbox" className="h-4 w-4 accent-indigo-500" />
@@ -593,7 +942,7 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                         className={`${btnPrimary} md:col-span-2`}
                                         disabled={availableTeams.length === 0}
                                     >
-                                        {availableTeams.length === 0 ? 'Toutes les equipes sont inscrites' : 'Ajouter l\'equipe'}
+                                        {availableTeams.length === 0 ? 'Toutes les equipes sont inscrites' : 'Ajouter les equipes'}
                                     </button>
                                 </form>
 
@@ -625,18 +974,25 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                             </StepSection>
 
                             {/* Step 2: Pistes */}
-                            <StepSection num={2} title="Configurer les pistes" desc="Les pistes (terrains / tables / postes) servent a planifier quand et ou se jouent les matchs." color="cyan">
+                            <StepSection num={2} title="Configurer les pistes" desc="Demandez a l'organisateur les phases concernees : une piste peut etre rattachee a plusieurs phases." color="cyan">
                                 <form action={va(createTournamentPitch)} className="grid gap-2 md:grid-cols-3">
                                     <input type="hidden" name="tournamentId" value={tournament.id} />
                                     <input type="hidden" name="orgSlug" value={orgSlug} />
                                     <input type="hidden" name="tournamentSlug" value={tournament.slug} />
                                     <input name="name" className={inputCls} placeholder="Nom de la piste" required />
-                                    <select name="phaseId" className={inputCls} defaultValue="">
-                                        <option value="">Toutes phases</option>
+                                    <select
+                                        name="phaseIds"
+                                        className={`${inputCls} md:col-span-2 min-h-28`}
+                                        multiple
+                                        size={Math.min(8, Math.max(3, tournament.phases.length))}
+                                    >
                                         {tournament.phases.map((phase) => (
                                             <option key={phase.id} value={phase.id}>{phase.name}</option>
                                         ))}
                                     </select>
+                                    <p className="md:col-span-2 text-xs text-slate-500">
+                                        Aucune phase selectionnee = piste disponible pour toutes les phases. Multi-selection via Ctrl/Cmd + clic.
+                                    </p>
                                     <button type="submit" className={btnPrimary}>Ajouter</button>
                                 </form>
 
@@ -850,6 +1206,8 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                         .filter((m) => m.phaseId === phase.id)
                                         .map((m) => ({
                                             id: m.id,
+                                            homeTeamId: m.homeTeamId,
+                                            awayTeamId: m.awayTeamId,
                                             roundNumber: m.roundNumber,
                                             bracketPos: m.bracketPos,
                                             status: m.status as 'SCHEDULED' | 'LIVE' | 'FINISHED' | 'CANCELLED',
@@ -878,7 +1236,7 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
 
                                             {(phase.type === 'CUSTOM' || phase.type === 'PLACEMENT_BRACKET') && (
                                                 <StepSection num={1} title="Generer la structure du bracket personnalise" desc="Definissez le nombre de participants. Les perdants peuvent rejouer pour etablir un classement complet.">
-                                                    <form action={va(generateCustomPlacementBracketMatches)} className="grid gap-2 md:grid-cols-5">
+                                                    <form action={va(generateCustomPlacementBracketMatches)} className="grid gap-2 md:grid-cols-6">
                                                         <input type="hidden" name="tournamentId" value={tournament.id} />
                                                         <input type="hidden" name="orgSlug" value={orgSlug} />
                                                         <input type="hidden" name="tournamentSlug" value={tournament.slug} />
@@ -886,6 +1244,10 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                         <div>
                                                             <label className="mb-1 block text-xs text-slate-500">Participants</label>
                                                             <input name="participantsCount" type="number" min={4} max={64} defaultValue={8} className={`${inputCls} w-full`} />
+                                                        </div>
+                                                        <div>
+                                                            <label className="mb-1 block text-xs text-slate-500">Heure de debut</label>
+                                                            <input name="startAt" type="datetime-local" className={`${inputCls} w-full`} />
                                                         </div>
                                                         <label className={`flex cursor-pointer items-center gap-2 self-end ${inputCls}`}>
                                                             <input name="includeLosersReplay" type="checkbox" defaultChecked className="h-4 w-4 accent-indigo-500" />
@@ -901,9 +1263,156 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                     </form>
                                                 </StepSection>
                                             )}
+
+                                            {phaseMatches.some((m) => m.roundNumber === 1) && (
+                                                <StepSection
+                                                    num={2}
+                                                    title="Verifier/ajuster les equipes avant lancement"
+                                                    desc="Les equipes du round 1 sont auto-assignees a la generation du bracket. Vous pouvez les corriger ici avant le debut des matchs."
+                                                    color="amber"
+                                                >
+                                                    <BracketSeedEditor
+                                                        tournamentId={tournament.id}
+                                                        orgSlug={orgSlug}
+                                                        tournamentSlug={tournament.slug}
+                                                        phaseId={phase.id}
+                                                        rows={phaseMatches
+                                                            .filter((m) => m.roundNumber === 1)
+                                                            .sort((a, b) => (a.bracketPos || '').localeCompare(b.bracketPos || ''))
+                                                            .map((m) => ({
+                                                                matchId: m.id,
+                                                                bracketPos: m.bracketPos,
+                                                                homeTeamId: m.homeTeamId,
+                                                                awayTeamId: m.awayTeamId,
+                                                            }))}
+                                                        teamOptions={tournament.registrations.map((r) => ({ id: r.teamId, name: r.team.name }))}
+                                                    />
+                                                </StepSection>
+                                            )}
                                         </div>
                                     )
                                 })}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* ── Matchs ─────────────────────────────────────────────────────── */}
+                {activeTab === 'planning' && (
+                    <div className="space-y-4">
+                        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
+                            <p className="font-semibold text-slate-200">Planning par piste et tranche horaire</p>
+                            <p className="mt-1">Visualisez les matchs par piste puis par horaire exact pour voir les matchs qui demarrent au meme moment.</p>
+                        </div>
+
+                        {matches.length === 0 ? (
+                            <EmptyState message="Aucun match disponible pour construire le planning." />
+                        ) : (
+                            <div className="grid gap-4 xl:grid-cols-2">
+                                {scheduleByPitch.map((pitch) => (
+                                    <div key={`planning-${pitch.pitchName}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-sm font-bold text-cyan-300">{pitch.pitchName}</p>
+                                            <span className="text-[11px] text-slate-500">{pitch.slots.length} horaire(s)</span>
+                                        </div>
+
+                                        {pitch.slots.length === 0 ? (
+                                            <p className="text-xs text-slate-500">Aucun match planifie sur cette piste.</p>
+                                        ) : (
+                                            <div className="space-y-2">
+                                                {pitch.slots.map((slot) => (
+                                                    <div key={`${pitch.pitchName}-${slot.slotStart}`} className="rounded-lg border border-slate-800 bg-slate-900/50 p-2">
+                                                        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-amber-300">{slot.label}</p>
+                                                        <div className="space-y-1.5">
+                                                            {slot.matches.map((match) => (
+                                                                <div key={`slot-${match.id}`} className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1.5">
+                                                                    <p className="text-xs font-semibold">
+                                                                        {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'}
+                                                                    </p>
+                                                                    <p className="text-[11px] text-slate-500">
+                                                                        {match.phase.name}
+                                                                        {match.scheduledAt ? ` • ${new Date(match.scheduledAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` : ''}
+                                                                        {match.roundNumber ? ` • Round ${match.roundNumber}` : ''}
+                                                                    </p>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {pitch.unscheduled.length > 0 && (
+                                            <div className="rounded-lg border border-dashed border-slate-700 bg-slate-900/40 p-2">
+                                                <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-400">Non planifies</p>
+                                                <div className="space-y-1">
+                                                    {pitch.unscheduled.map((match) => (
+                                                        <p key={`unscheduled-${match.id}`} className="text-xs text-slate-300">
+                                                            {match.phase.name}: {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'}
+                                                        </p>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {activeTab === 'planning-time' && (
+                    <div className="space-y-4">
+                        <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
+                            <p className="font-semibold text-slate-200">Planning par horaire</p>
+                            <p className="mt-1">Tous les matchs regroupes par horaire exact, puis tries par piste pour chaque horaire.</p>
+                        </div>
+
+                        {matches.length === 0 ? (
+                            <EmptyState message="Aucun match disponible pour construire le planning." />
+                        ) : (
+                            <div className="space-y-3">
+                                {scheduleByTime.slots.length === 0 ? (
+                                    <p className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-500">
+                                        Aucun match planifie avec une date/heure.
+                                    </p>
+                                ) : (
+                                    scheduleByTime.slots.map((slot) => (
+                                        <div key={`planning-time-${slot.at}`} className="rounded-xl border border-slate-800 bg-slate-950/60 p-3">
+                                            <div className="mb-2 flex items-center justify-between">
+                                                <p className="text-sm font-bold text-amber-300">{slot.label}</p>
+                                                <span className="text-[11px] text-slate-500">{slot.matches.length} match(s)</span>
+                                            </div>
+                                            <div className="space-y-1.5">
+                                                {slot.matches.map((match) => (
+                                                    <div key={`planning-time-match-${match.id}`} className="rounded-md border border-slate-800 bg-slate-900/50 px-3 py-2">
+                                                        <p className="text-xs font-semibold">
+                                                            {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'}
+                                                        </p>
+                                                        <p className="text-[11px] text-slate-500">
+                                                            {match.pitch.name} • {match.phase.name}
+                                                            {match.roundNumber ? ` • Round ${match.roundNumber}` : ''}
+                                                            {match.bracketPos ? ` • ${match.bracketPos}` : ''}
+                                                        </p>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    ))
+                                )}
+
+                                {scheduleByTime.unscheduled.length > 0 && (
+                                    <div className="rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-3">
+                                        <p className="mb-1 text-[11px] uppercase tracking-wider text-slate-400">Matchs non planifies</p>
+                                        <div className="space-y-1">
+                                            {scheduleByTime.unscheduled.map((match) => (
+                                                <p key={`planning-time-unscheduled-${match.id}`} className="text-xs text-slate-300">
+                                                    {match.pitch.name}: {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'} ({match.phase.name})
+                                                </p>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
@@ -915,10 +1424,25 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                         <div className="rounded-xl border border-slate-800 bg-slate-900/40 p-3 text-xs text-slate-400">
                             <p className="font-semibold text-slate-200">Planification et suivi des matchs</p>
                             <p className="mt-1">Etape 1 : generez les matchs automatiquement (round-robin) ou creez-les manuellement. Etape 2 : mettez a jour les scores et statuts dans l'editeur global en bas de page.</p>
+                            <form
+                                action={va(deleteAllTournamentMatches)}
+                                className="mt-3"
+                                onSubmit={(event) => {
+                                    const ok = window.confirm('Supprimer tous les matchs de ce tournoi ? Cette action est irreversible.')
+                                    if (!ok) event.preventDefault()
+                                }}
+                            >
+                                <input type="hidden" name="tournamentId" value={tournament.id} />
+                                <input type="hidden" name="orgSlug" value={orgSlug} />
+                                <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                <button type="submit" className="rounded-md border border-red-500/40 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-500/10 transition-colors">
+                                    Supprimer tous les matchs
+                                </button>
+                            </form>
                         </div>
 
                         {/* Step 1: Auto generation */}
-                        <StepSection num={1} title="Generation automatique round-robin" desc="Genere tous les matchs d'une phase en respectant les disponibilites des pistes et des equipes.">
+                        <StepSection num={1} title="Generation automatique round-robin" desc="Genere tous les matchs d'une phase en respectant les disponibilites des pistes et des equipes. Pour une phase de poules, la generation suit les placements de chaque poule.">
                             <form action={va(generatePhaseRoundRobinMatches)} className="grid gap-2 md:grid-cols-3 xl:grid-cols-6">
                                 <input type="hidden" name="tournamentId" value={tournament.id} />
                                 <input type="hidden" name="orgSlug" value={orgSlug} />
@@ -968,45 +1492,76 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                         </StepSection>
 
                         {/* Step 2: Manual match creation */}
-                        <StepSection num={2} title="Creer un match manuellement" desc="Planifiez un match specifique sur une piste donnee, avec les equipes et la position dans le bracket." color="cyan">
-                            <form action={va(createTournamentMatch)} className="grid gap-2 md:grid-cols-3 xl:grid-cols-5">
-                                <input type="hidden" name="tournamentId" value={tournament.id} />
-                                <input type="hidden" name="orgSlug" value={orgSlug} />
-                                <input type="hidden" name="tournamentSlug" value={tournament.slug} />
-
-                                <select name="phaseId" className={inputCls} required defaultValue="">
-                                    <option value="" disabled>Phase</option>
-                                    {tournament.phases.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                </select>
-                                <select name="pitchId" className={inputCls} required defaultValue="">
-                                    <option value="" disabled>Piste</option>
-                                    {tournament.pitches.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                </select>
-                                <select name="homeTeamId" className={inputCls} defaultValue="">
-                                    <option value="">Equipe domicile</option>
-                                    {tournament.registrations.map((r) => (
-                                        <option key={`home-${r.id}`} value={r.teamId}>{r.team.name}</option>
-                                    ))}
-                                </select>
-                                <select name="awayTeamId" className={inputCls} defaultValue="">
-                                    <option value="">Equipe exterieur</option>
-                                    {tournament.registrations.map((r) => (
-                                        <option key={`away-${r.id}`} value={r.teamId}>{r.team.name}</option>
-                                    ))}
-                                </select>
-                                <input name="scheduledAt" type="datetime-local" className={inputCls} />
-                                <input name="maxDurationMinutes" type="number" min={5} max={600} defaultValue={30} placeholder="Duree max (min)" className={inputCls} />
-                                <input name="teamBreakMinutes" type="number" min={0} max={240} defaultValue={10} placeholder="Battement (min)" className={inputCls} />
-                                <input name="roundNumber" type="number" min={1} placeholder="Round n°" className={inputCls} />
-                                <input name="bracketPos" placeholder="Position bracket (WB-R1-M1…)" className={inputCls} />
+                        <StepSection num={2} title="Creer des matchs manuellement" desc="Creez un match individuel ou importez plusieurs matchs d'un coup via le mode groupé." color="cyan">
+                            {/* Mode toggle */}
+                            <div className="mb-3 flex gap-2 border-b border-slate-800 pb-2">
                                 <button
-                                    type="submit"
-                                    className={`${btnPrimary} xl:col-span-1`}
-                                    disabled={tournament.pitches.length === 0 || tournament.phases.length === 0}
+                                    onClick={() => setMatchCreateMode('single')}
+                                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${matchCreateMode === 'single' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
                                 >
-                                    Creer le match
+                                    Match unique
                                 </button>
-                            </form>
+                                <button
+                                    onClick={() => setMatchCreateMode('bulk')}
+                                    className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${matchCreateMode === 'bulk' ? 'bg-indigo-600 text-white' : 'text-slate-400 hover:text-slate-200'}`}
+                                >
+                                    Ajout groupé (plusieurs matchs)
+                                </button>
+                            </div>
+
+                            {matchCreateMode === 'single' && (
+                                <form action={va(createTournamentMatch)} className="grid gap-2 md:grid-cols-3 xl:grid-cols-5">
+                                    <input type="hidden" name="tournamentId" value={tournament.id} />
+                                    <input type="hidden" name="orgSlug" value={orgSlug} />
+                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+
+                                    <select name="phaseId" className={inputCls} required defaultValue="">
+                                        <option value="" disabled>Phase</option>
+                                        {tournament.phases.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                    </select>
+                                    <select name="pitchId" className={inputCls} required defaultValue="">
+                                        <option value="" disabled>Piste</option>
+                                        {tournament.pitches.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                                    </select>
+                                    <select name="homeTeamId" className={inputCls} defaultValue="">
+                                        <option value="">Equipe domicile</option>
+                                        {tournament.registrations.map((r) => (
+                                            <option key={`home-${r.id}`} value={r.teamId}>{r.team.name}</option>
+                                        ))}
+                                    </select>
+                                    <select name="awayTeamId" className={inputCls} defaultValue="">
+                                        <option value="">Equipe exterieur</option>
+                                        {tournament.registrations.map((r) => (
+                                            <option key={`away-${r.id}`} value={r.teamId}>{r.team.name}</option>
+                                        ))}
+                                    </select>
+                                    <input name="scheduledAt" type="datetime-local" className={inputCls} />
+                                    <input name="maxDurationMinutes" type="number" min={5} max={600} defaultValue={30} placeholder="Duree max (min)" className={inputCls} />
+                                    <input name="teamBreakMinutes" type="number" min={0} max={240} defaultValue={10} placeholder="Battement (min)" className={inputCls} />
+                                    <input name="roundNumber" type="number" min={1} placeholder="Round n°" className={inputCls} />
+                                    <input name="bracketPos" placeholder="Position bracket (WB-R1-M1…)" className={inputCls} />
+                                    <button
+                                        type="submit"
+                                        className={`${btnPrimary} xl:col-span-1`}
+                                        disabled={tournament.pitches.length === 0 || tournament.phases.length === 0}
+                                    >
+                                        Creer le match
+                                    </button>
+                                </form>
+                            )}
+
+                            {matchCreateMode === 'bulk' && (
+                                <MatchBulkCreateForm
+                                    tournamentId={tournament.id}
+                                    orgSlug={orgSlug}
+                                    tournamentSlug={tournament.slug}
+                                    phases={tournament.phases.map((p) => ({ id: p.id, name: p.name }))}
+                                    pitches={Array.from(
+                                        new Map(tournament.pitches.map((p) => [p.name, { id: p.id, name: p.name }])).values()
+                                    )}
+                                    teams={tournament.registrations.map((r) => ({ teamId: r.teamId, name: r.team.name }))}
+                                />
+                            )}
                         </StepSection>
 
                         {/* Step 3: Match list */}
@@ -1015,6 +1570,55 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                 <p className="text-center text-xs text-slate-500 py-4">Aucun match planifie. Utilisez la generation automatique ou la creation manuelle ci-dessus.</p>
                             ) : (
                                 <div className="space-y-2">
+                                    <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-950/40 p-2 md:flex-row md:items-center md:justify-between">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedMatchIds(allSelected ? [] : allVisibleMatchIds)}
+                                                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                                            >
+                                                {allSelected ? 'Tout deselec.' : 'Tout selectionner'}
+                                            </button>
+                                            {(['SCHEDULED', 'LIVE', 'FINISHED', 'CANCELLED'] as const).map((status) => {
+                                                const ids = matchIdsByStatus.get(status) ?? []
+                                                const hasAny = ids.length > 0
+                                                const allThisStatusSelected = hasAny && ids.every((id) => selectedSet.has(id))
+                                                return (
+                                                    <button
+                                                        key={`select-status-${status}`}
+                                                        type="button"
+                                                        onClick={() => toggleSelectStatus(status)}
+                                                        disabled={!hasAny}
+                                                        className={`rounded-md border px-2 py-1 text-xs transition-colors disabled:opacity-40 ${
+                                                            allThisStatusSelected
+                                                                ? 'border-indigo-500/60 bg-indigo-600/20 text-indigo-200'
+                                                                : 'border-slate-700 text-slate-300 hover:bg-slate-800'
+                                                        }`}
+                                                    >
+                                                        {status} ({ids.length})
+                                                    </button>
+                                                )
+                                            })}
+                                            <span className="text-xs text-slate-400">{selectedCount} selectionne(s)</span>
+                                        </div>
+
+                                        <form action={va(deleteSelectedTournamentMatches)} className="flex items-center gap-2">
+                                            <input type="hidden" name="tournamentId" value={tournament.id} />
+                                            <input type="hidden" name="orgSlug" value={orgSlug} />
+                                            <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                            {selectedMatchIds.map((id) => (
+                                                <input key={`selected-${id}`} type="hidden" name="matchIds" value={id} />
+                                            ))}
+                                            <button
+                                                type="submit"
+                                                disabled={selectedCount === 0}
+                                                className="rounded-md border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                                            >
+                                                Supprimer la selection
+                                            </button>
+                                        </form>
+                                    </div>
+
                                     {matches.map((match) => (
                                         <div key={match.id} className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/40 px-3 py-2">
                                             <div className="min-w-0">
@@ -1032,6 +1636,22 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                 </p>
                                             </div>
                                             <div className="flex shrink-0 items-center gap-2">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={selectedSet.has(match.id)}
+                                                    onChange={(event) => {
+                                                        const checked = event.target.checked
+                                                        setSelectedMatchIds((prev) => {
+                                                            if (checked) {
+                                                                if (prev.includes(match.id)) return prev
+                                                                return [...prev, match.id]
+                                                            }
+                                                            return prev.filter((id) => id !== match.id)
+                                                        })
+                                                    }}
+                                                    className="h-4 w-4 accent-indigo-500"
+                                                    aria-label={`Selectionner le match ${match.id}`}
+                                                />
                                                 <span className={`rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${
                                                     match.status === 'FINISHED' ? 'bg-emerald-600/20 text-emerald-300'
                                                     : match.status === 'LIVE' ? 'bg-amber-600/20 text-amber-300'

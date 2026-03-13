@@ -46,6 +46,17 @@ export default async function DashboardOrgTournamentDetails({
             _count: {
                 select: { registrations: true },
             },
+            actionLogs: {
+                orderBy: { createdAt: 'desc' },
+                take: 60,
+                select: {
+                    id: true,
+                    actionType: true,
+                    message: true,
+                    actorName: true,
+                    createdAt: true,
+                },
+            },
         },
     })
 
@@ -104,6 +115,13 @@ export default async function DashboardOrgTournamentDetails({
                         seed: r.seed,
                         isConfirmed: r.isConfirmed,
                         team: r.team,
+                    })),
+                    actionLogs: tournament.actionLogs.map((log) => ({
+                        id: log.id,
+                        actionType: log.actionType,
+                        message: log.message,
+                        actorName: log.actorName,
+                        createdAt: log.createdAt.toISOString(),
                     })),
                     _count: tournament._count,
                 }}

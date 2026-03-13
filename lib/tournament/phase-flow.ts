@@ -95,7 +95,7 @@ export function validatePhaseFlow(raw: unknown) {
 
   const phases = parsed.data
   const keySet = new Set<string>()
-  const orderSet = new Set<number>()
+  const orderMap = new Map<number, typeof phases>()
 
   for (const phase of phases) {
     if (keySet.has(phase.key)) {
@@ -108,15 +108,31 @@ export function validatePhaseFlow(raw: unknown) {
     }
     keySet.add(phase.key)
 
-    if (orderSet.has(phase.order)) {
+    const existing = orderMap.get(phase.order) ?? []
+    existing.push(phase)
+    orderMap.set(phase.order, existing)
+  }
+
+  for (const [order, sameOrderPhases] of orderMap.entries()) {
+    if (sameOrderPhases.length <= 1) continue
+
+    const groupNames = sameOrderPhases.map((phase) => {
+      const rawGroup = phase.config && typeof phase.config.parallelGroup === 'string'
+        ? phase.config.parallelGroup.trim()
+        : ''
+      return rawGroup
+    })
+
+    const firstGroup = groupNames[0]
+    const allInSameGroup = firstGroup.length > 0 && groupNames.every((groupName) => groupName === firstGroup)
+    if (!allInSameGroup) {
       return {
         success: false as const,
         error: {
-          message: `Ordre de phase duplique: ${phase.order}`,
+          message: `Ordre de phase duplique: ${order}. Definissez le meme groupe parallele pour les phases simultanees.`,
         },
       }
     }
-    orderSet.add(phase.order)
   }
 
   for (const phase of phases) {

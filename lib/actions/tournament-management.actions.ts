@@ -5,6 +5,7 @@ import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 import { prisma } from '@/lib/prisma'
 import { getAuthUser } from './utils.actions'
+import { validatePhaseFlow } from '@/lib/tournament/phase-flow'
 
 type ActionState = {
   success?: boolean
@@ -19,7 +20,11 @@ const ManageTournamentBaseSchema = z.object({
 
 const CreatePitchSchema = ManageTournamentBaseSchema.extend({
   name: z.string().min(2).max(80),
-  phaseId: z.string().uuid().optional().or(z.literal('')),
+  phaseIds: z.array(z.string().uuid()).optional(),
+})
+
+const UpdatePhaseFlowSchema = ManageTournamentBaseSchema.extend({
+  phasesJson: z.string().min(2),
 })
 
 const DeletePitchSchema = ManageTournamentBaseSchema.extend({
@@ -27,7 +32,7 @@ const DeletePitchSchema = ManageTournamentBaseSchema.extend({
 })
 
 const RegistrationSchema = ManageTournamentBaseSchema.extend({
-  teamId: z.string().uuid(),
+  teamIds: z.array(z.string().uuid()).min(1),
   seed: z.preprocess(
     (value) => (value === '' || value === null || value === undefined ? undefined : Number(value)),
     z.number().int().positive().max(512).optional()
@@ -71,6 +76,10 @@ const MatchStatusSchema = ManageTournamentBaseSchema.extend({
 
 const DeleteMatchSchema = ManageTournamentBaseSchema.extend({
   matchId: z.string().uuid(),
+})
+
+const DeleteSelectedMatchesSchema = ManageTournamentBaseSchema.extend({
+  matchIds: z.array(z.string().uuid()).min(1),
 })
 
 const GenerateMatchesSchema = ManageTournamentBaseSchema.extend({
@@ -143,6 +152,19 @@ const BulkMatchUpdateSchema = ManageTournamentBaseSchema.extend({
   updatesJson: z.string().min(2),
 })
 
+const BulkCreateMatchesSchema = ManageTournamentBaseSchema.extend({
+  phaseId: z.string().uuid(),
+  matchesJson: z.string().min(2),
+  maxDurationMinutes: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? 30 : Number(v)),
+    z.number().int().min(5).max(600)
+  ),
+  teamBreakMinutes: z.preprocess(
+    (v) => (v === '' || v === null || v === undefined ? 0 : Number(v)),
+    z.number().int().min(0).max(240)
+  ),
+})
+
 const BulkMatchUpdateItemSchema = z.object({
   matchId: z.string().uuid(),
   status: z.enum(['SCHEDULED', 'LIVE', 'FINISHED', 'CANCELLED']).optional(),
@@ -159,11 +181,43 @@ const ClosePhaseSchema = ManageTournamentBaseSchema.extend({
 const GenerateCustomPlacementBracketSchema = ManageTournamentBaseSchema.extend({
   phaseId: z.string().uuid(),
   participantsCount: z.preprocess((value) => Number(value), z.number().int().min(4).max(64)),
+  startAt: z.preprocess((value) => {
+    if (value === '' || value === null || value === undefined) return undefined
+    const date = new Date(String(value))
+    return Number.isNaN(date.getTime()) ? undefined : date
+  }, z.date().optional()),
   includeLosersReplay: z.preprocess((value) => value === 'on' || value === true, z.boolean()),
   overwritePhaseMatches: z.preprocess((value) => value === 'on' || value === true, z.boolean()),
 })
 
+const BulkBracketSeedAssignSchema = ManageTournamentBaseSchema.extend({
+  phaseId: z.string().uuid(),
+  seedsJson: z.string().min(2),
+})
+
+const BracketSeedAssignItemSchema = z.object({
+  matchId: z.string().uuid(),
+  homeTeamId: z.string().uuid().optional().or(z.literal('')),
+  awayTeamId: z.string().uuid().optional().or(z.literal('')),
+})
+
 const DEFAULT_EXISTING_MATCH_DURATION_MINUTES = 30
+
+function toPitchResourceKey(pitchName: string) {
+  const normalized = pitchName.trim().toLowerCase()
+  return normalized.length > 0 ? normalized : pitchName
+}
+
+function uniquePitchResources(pitches: Array<{ id: string; name: string }>) {
+  const resources = new Map<string, { id: string; key: string }>()
+  for (const pitch of pitches) {
+    const key = toPitchResourceKey(pitch.name)
+    if (!resources.has(key)) {
+      resources.set(key, { id: pitch.id, key })
+    }
+  }
+  return Array.from(resources.values())
+}
 
 type GroupPlacement = {
   teamId: string
@@ -210,6 +264,29 @@ async function assertOrganizerCanManageTournament(tournamentId: string) {
 function revalidateTournamentPath(orgSlug: string, tournamentSlug: string) {
   revalidatePath(`/dashboard/org/${orgSlug}/tournaments/${tournamentSlug}`)
   revalidatePath(`/dashboard/org/${orgSlug}/tournaments`)
+}
+
+async function recordTournamentAction(params: {
+  tournamentId: string
+  actionType: string
+  message: string
+  payload?: Prisma.InputJsonValue
+}) {
+  try {
+    const user = await getAuthUser()
+    await prisma.tournamentActionLog.create({
+      data: {
+        tournamentId: params.tournamentId,
+        actionType: params.actionType,
+        message: params.message,
+        payload: params.payload,
+        actorId: user.id,
+        actorName: user.display_name || user.username,
+      },
+    })
+  } catch {
+    // Audit logging must never block tournament operations.
+  }
 }
 
 function readGroupPhaseConfig(config: unknown): GroupPhaseConfig {
@@ -499,6 +576,75 @@ async function assertPreviousRoutingPhaseCompleted(
   }
 }
 
+function parseBracketCoordinate(bracketPos: string | null) {
+  if (!bracketPos) return null
+  const m = bracketPos.match(/^(WB|LB)-R(\d+)-M(\d+)$/)
+  if (!m) return null
+  const lane = m[1] as 'WB' | 'LB'
+  const round = Number(m[2])
+  const matchNo = Number(m[3])
+  if (!Number.isInteger(round) || !Number.isInteger(matchNo) || round < 1 || matchNo < 1) return null
+  return { lane, round, matchNo }
+}
+
+async function propagateWinnerToNextBracketMatch(
+  tx: Prisma.TransactionClient,
+  source: {
+    phaseId: string
+    bracketPos: string | null
+    homeTeamId: string | null
+    awayTeamId: string | null
+    winnerId: string | null
+  }
+) {
+  if (!source.winnerId) return
+
+  const parsed = parseBracketCoordinate(source.bracketPos)
+  if (!parsed) return
+
+  const nextRound = parsed.round + 1
+  const nextMatchNo = Math.ceil(parsed.matchNo / 2)
+  const nextBracketPos = `${parsed.lane}-R${nextRound}-M${nextMatchNo}`
+
+  const nextMatch = await tx.match.findFirst({
+    where: {
+      phaseId: source.phaseId,
+      bracketPos: nextBracketPos,
+    },
+    select: {
+      id: true,
+      status: true,
+      homeTeamId: true,
+      awayTeamId: true,
+    },
+  })
+
+  if (!nextMatch) return
+  if (nextMatch.status === MatchStatus.FINISHED || nextMatch.status === MatchStatus.CANCELLED) return
+
+  const side: 'homeTeamId' | 'awayTeamId' = parsed.matchNo % 2 === 1 ? 'homeTeamId' : 'awayTeamId'
+  const currentValue = side === 'homeTeamId' ? nextMatch.homeTeamId : nextMatch.awayTeamId
+
+  // Keep manual edits unless value is empty or still one of the source teams.
+  if (
+    currentValue &&
+    currentValue !== source.homeTeamId &&
+    currentValue !== source.awayTeamId &&
+    currentValue !== source.winnerId
+  ) {
+    return
+  }
+
+  if (currentValue === source.winnerId) return
+
+  await tx.match.update({
+    where: { id: nextMatch.id },
+    data: {
+      [side]: source.winnerId,
+    },
+  })
+}
+
 // --------------- Round-robin helpers ---------------
 
 function buildRoundRobinPairings(teamIds: string[]) {
@@ -532,27 +678,176 @@ function buildRoundRobinPairings(teamIds: string[]) {
   return pairings
 }
 
+type SchedulablePairing = {
+  homeTeamId: string
+  awayTeamId: string
+  round: number
+  bracketPos?: string
+}
+
+function scheduleRoundRobinMatches(params: {
+  phaseId: string
+  pairings: SchedulablePairing[]
+  pitchResources: Array<{ id: string; key: string }>
+  startTimeMs: number
+  matchDurationMs: number
+  teamBreakMs: number
+  pitchAvailableAt: Map<string, number>
+  teamAvailableAt: Map<string, number>
+}) {
+  const {
+    phaseId,
+    pairings,
+    pitchResources,
+    startTimeMs,
+    matchDurationMs,
+    teamBreakMs,
+    pitchAvailableAt,
+    teamAvailableAt,
+  } = params
+
+  const pending = [...pairings]
+  const scheduled: Array<{
+    phaseId: string
+    pitchId: string
+    homeTeamId: string
+    awayTeamId: string
+    roundNumber: number
+    bracketPos?: string
+    scheduledAt: Date
+  }> = []
+
+  while (pending.length > 0) {
+    let bestPairingIndex = 0
+    let bestPitchId = pitchResources[0]?.id
+    let bestPitchKey = pitchResources[0]?.key
+    let bestStart = Number.POSITIVE_INFINITY
+
+    for (let pairingIndex = 0; pairingIndex < pending.length; pairingIndex += 1) {
+      const pairing = pending[pairingIndex]
+      const homeReadyAt = teamAvailableAt.get(pairing.homeTeamId) ?? startTimeMs
+      const awayReadyAt = teamAvailableAt.get(pairing.awayTeamId) ?? startTimeMs
+
+      for (const pitch of pitchResources) {
+        const pitchReadyAt = pitchAvailableAt.get(pitch.key) ?? startTimeMs
+        const candidateStart = Math.max(startTimeMs, pitchReadyAt, homeReadyAt, awayReadyAt)
+
+        if (
+          candidateStart < bestStart ||
+          (candidateStart === bestStart && pairing.round < (pending[bestPairingIndex]?.round ?? Number.POSITIVE_INFINITY))
+        ) {
+          bestStart = candidateStart
+          bestPitchId = pitch.id
+          bestPitchKey = pitch.key
+          bestPairingIndex = pairingIndex
+        }
+      }
+    }
+
+    const pairing = pending.splice(bestPairingIndex, 1)[0]
+    const matchEnd = bestStart + matchDurationMs
+
+    if (bestPitchKey) {
+      pitchAvailableAt.set(bestPitchKey, matchEnd)
+    }
+    teamAvailableAt.set(pairing.homeTeamId, matchEnd + teamBreakMs)
+    teamAvailableAt.set(pairing.awayTeamId, matchEnd + teamBreakMs)
+
+    scheduled.push({
+      phaseId,
+      pitchId: bestPitchId,
+      homeTeamId: pairing.homeTeamId,
+      awayTeamId: pairing.awayTeamId,
+      roundNumber: pairing.round,
+      ...(pairing.bracketPos ? { bracketPos: pairing.bracketPos } : {}),
+      scheduledAt: new Date(bestStart),
+    })
+  }
+
+  return scheduled
+}
+
 export async function createTournamentPitch(
   formData: FormData
 ): Promise<ActionState> {
-  const parsed = CreatePitchSchema.safeParse(Object.fromEntries(formData))
+  const rawPhaseIds = formData
+    .getAll('phaseIds')
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+  const fallbackPhaseId = String(formData.get('phaseId') ?? '').trim()
+  const phaseIds = rawPhaseIds.length > 0 ? rawPhaseIds : fallbackPhaseId ? [fallbackPhaseId] : []
+
+  const parsed = CreatePitchSchema.safeParse({
+    ...Object.fromEntries(formData),
+    phaseIds,
+  })
   if (!parsed.success) return { success: false, message: 'Donnees invalides pour la piste.' }
 
-  const { tournamentId, orgSlug, tournamentSlug, name, phaseId } = parsed.data
+  const { tournamentId, orgSlug, tournamentSlug, name } = parsed.data
+  const uniquePhaseIds = [...new Set(parsed.data.phaseIds ?? [])]
 
   try {
     await assertOrganizerCanManageTournament(tournamentId)
 
-    await prisma.pitch.create({
-      data: {
+    if (uniquePhaseIds.length > 0) {
+      const phases = await prisma.phase.findMany({
+        where: {
+          tournamentId,
+          id: { in: uniquePhaseIds },
+        },
+        select: { id: true },
+      })
+
+      if (phases.length !== uniquePhaseIds.length) {
+        return { success: false, message: 'Une ou plusieurs phases selectionnees sont invalides.' }
+      }
+    }
+
+    const existing = await prisma.pitch.findMany({
+      where: {
+        tournamentId,
+        name,
+        ...(uniquePhaseIds.length > 0
+          ? { phaseId: { in: uniquePhaseIds } }
+          : { phaseId: null }),
+      },
+      select: { phaseId: true },
+    })
+
+    const existingPhaseKeys = new Set(existing.map((pitch) => pitch.phaseId ?? '__ALL__'))
+    const targetPhaseIds = uniquePhaseIds.length > 0 ? uniquePhaseIds : [null]
+    const rows = targetPhaseIds
+      .filter((phaseId) => !existingPhaseKeys.has(phaseId ?? '__ALL__'))
+      .map((phaseId) => ({
         name,
         tournamentId,
-        phaseId: phaseId || null,
+        phaseId,
+      }))
+
+    if (rows.length === 0) {
+      return { success: false, message: 'Cette piste est deja associee aux phases selectionnees.' }
+    }
+
+    await prisma.pitch.createMany({
+      data: rows,
+    })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'PITCH_CREATE',
+      message: rows.length > 1 ? `${rows.length} associations de piste creees (${name}).` : `Piste creee (${name}).`,
+      payload: {
+        name,
+        createdCount: rows.length,
+        phaseIds: targetPhaseIds,
       },
     })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
-    return { success: true, message: 'Piste ajoutee.' }
+    return {
+      success: true,
+      message: rows.length > 1 ? `${rows.length} associations de piste ajoutees.` : 'Piste ajoutee.',
+    }
   } catch (error) {
     return { success: false, message: error instanceof Error ? error.message : 'Erreur piste.' }
   }
@@ -567,47 +862,262 @@ export async function deleteTournamentPitch(formData: FormData) {
   try {
     await assertOrganizerCanManageTournament(tournamentId)
 
+    const pitch = await prisma.pitch.findUnique({
+      where: { id: pitchId },
+      select: { id: true, name: true, phaseId: true, tournamentId: true },
+    })
+    if (!pitch || pitch.tournamentId !== tournamentId) return
+
     const linkedMatches = await prisma.match.count({ where: { pitchId } })
     if (linkedMatches > 0) return
 
     await prisma.pitch.delete({ where: { id: pitchId } })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'PITCH_DELETE',
+      message: `Piste supprimee (${pitch.name}).`,
+      payload: { pitchId: pitch.id, name: pitch.name, phaseId: pitch.phaseId },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
   } catch {
     return
   }
 }
 
-export async function addTournamentRegistration(
+export async function updateTournamentPhaseFlow(
+  prevState: ActionState,
   formData: FormData
 ): Promise<ActionState> {
-  const parsed = RegistrationSchema.safeParse(Object.fromEntries(formData))
-  if (!parsed.success) return { success: false, message: 'Donnees invalides pour inscription.' }
+  void prevState
+  const parsed = UpdatePhaseFlowSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Donnees invalides pour les phases.' }
 
-  const { tournamentId, orgSlug, tournamentSlug, teamId, seed, isConfirmed } = parsed.data
+  const { tournamentId, orgSlug, tournamentSlug, phasesJson } = parsed.data
+
+  let rawFlow: unknown
+  try {
+    rawFlow = JSON.parse(phasesJson)
+  } catch {
+    return { success: false, message: 'Le JSON des phases est invalide.' }
+  }
+
+  const validatedFlow = validatePhaseFlow(rawFlow)
+  if (!validatedFlow.success) {
+    return {
+      success: false,
+      message: 'flatten' in validatedFlow.error
+        ? validatedFlow.error.flatten().formErrors[0] || 'Configuration des phases invalide.'
+        : validatedFlow.error.message,
+    }
+  }
+
+  const phaseFlow = [...validatedFlow.data].sort((a, b) => a.order - b.order)
 
   try {
     const tournament = await assertOrganizerCanManageTournament(tournamentId)
 
-    const team = await prisma.team.findUnique({
-      where: { id: teamId },
+    await prisma.$transaction(async (tx) => {
+      const existingPhases = await tx.phase.findMany({
+        where: { tournamentId },
+        include: {
+          _count: { select: { matches: true } },
+        },
+      })
+
+      const existingByKey = new Map<string, (typeof existingPhases)[number]>()
+      for (const phase of existingPhases) {
+        const config = phase.config && typeof phase.config === 'object'
+          ? (phase.config as Record<string, unknown>)
+          : {}
+        const key = typeof config.key === 'string' ? config.key : ''
+        if (key) existingByKey.set(key, phase)
+      }
+
+      const flowKeys = new Set(phaseFlow.map((phase) => phase.key))
+      const phasesToDelete = existingPhases.filter((phase) => {
+        const config = phase.config && typeof phase.config === 'object'
+          ? (phase.config as Record<string, unknown>)
+          : {}
+        const key = typeof config.key === 'string' ? config.key : ''
+        return key ? !flowKeys.has(key) : false
+      })
+
+      const blockedDelete = phasesToDelete.find((phase) => phase._count.matches > 0)
+      if (blockedDelete) {
+        throw new Error(`Impossible de supprimer la phase "${blockedDelete.name}": des matchs existent deja.`)
+      }
+
+      if (phasesToDelete.length > 0) {
+        const idsToDelete = phasesToDelete.map((phase) => phase.id)
+        await tx.pitch.updateMany({
+          where: { tournamentId, phaseId: { in: idsToDelete } },
+          data: { phaseId: null },
+        })
+        await tx.phase.deleteMany({ where: { id: { in: idsToDelete } } })
+      }
+
+      const phaseIdByKey = new Map<string, string>()
+
+      for (const phase of phaseFlow) {
+        const existing = existingByKey.get(phase.key)
+        if (existing) {
+          const existingConfig = existing.config && typeof existing.config === 'object'
+            ? (existing.config as Record<string, unknown>)
+            : {}
+          await tx.phase.update({
+            where: { id: existing.id },
+            data: {
+              name: phase.name,
+              type: phase.type,
+              order: phase.order,
+              config: {
+                ...existingConfig,
+                ...(phase.config ?? {}),
+                key: phase.key,
+                routes: [],
+              },
+            },
+          })
+          phaseIdByKey.set(phase.key, existing.id)
+          continue
+        }
+
+        const created = await tx.phase.create({
+          data: {
+            tournamentId,
+            name: phase.name,
+            type: phase.type,
+            order: phase.order,
+            config: {
+              ...(phase.config ?? {}),
+              key: phase.key,
+              routes: [],
+            },
+          },
+        })
+        phaseIdByKey.set(phase.key, created.id)
+      }
+
+      for (const phase of phaseFlow) {
+        const phaseId = phaseIdByKey.get(phase.key)
+        if (!phaseId) continue
+
+        const resolvedRoutes = phase.routes.map((route) => ({
+          ...route,
+          toPhaseId: phaseIdByKey.get(route.toPhaseKey) || null,
+        }))
+
+        await tx.phase.update({
+          where: { id: phaseId },
+          data: {
+            config: {
+              ...(phase.config ?? {}),
+              key: phase.key,
+              routes: resolvedRoutes,
+            },
+          },
+        })
+      }
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    revalidatePath(`/public/${orgSlug}/${tournament.slug}`)
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'PHASE_FLOW_UPDATE',
+      message: 'Structure des phases mise a jour.',
+      payload: { phaseCount: phaseFlow.length },
+    })
+    return { success: true, message: 'Structure des phases mise a jour.' }
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Erreur lors de la mise a jour des phases.',
+    }
+  }
+}
+
+export async function addTournamentRegistration(
+  formData: FormData
+): Promise<ActionState> {
+  const rawTeamIds = formData
+    .getAll('teamIds')
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+  const fallbackTeamId = String(formData.get('teamId') ?? '').trim()
+  const teamIds = rawTeamIds.length > 0 ? rawTeamIds : fallbackTeamId ? [fallbackTeamId] : []
+
+  const parsed = RegistrationSchema.safeParse({
+    ...Object.fromEntries(formData),
+    teamIds,
+  })
+  if (!parsed.success) return { success: false, message: 'Donnees invalides pour inscription.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, seed, isConfirmed } = parsed.data
+  const uniqueTeamIds = [...new Set(parsed.data.teamIds)]
+
+  try {
+    const tournament = await assertOrganizerCanManageTournament(tournamentId)
+
+    const teams = await prisma.team.findMany({
+      where: { id: { in: uniqueTeamIds } },
       select: { id: true, organizationId: true },
     })
 
-    if (!team || team.organizationId !== tournament.organizationId) {
+    if (teams.length !== uniqueTeamIds.length) {
+      return { success: false, message: 'Une ou plusieurs equipes sont introuvables.' }
+    }
+
+    const hasForeignTeam = teams.some((team) => team.organizationId !== tournament.organizationId)
+    if (hasForeignTeam) {
       return { success: false, message: "Equipe invalide pour cette organisation." }
     }
 
-    await prisma.tournamentRegistration.create({
-      data: {
-        tournamentId,
-        teamId,
-        seed,
+    if (tournament.maxTeams) {
+      const currentCount = await prisma.tournamentRegistration.count({ where: { tournamentId } })
+      const remainingSlots = Math.max(0, tournament.maxTeams - currentCount)
+      if (uniqueTeamIds.length > remainingSlots) {
+        return {
+          success: false,
+          message: `Il reste ${remainingSlots} place(s). Selectionnez moins d'equipes.`,
+        }
+      }
+    }
+
+    const rows = uniqueTeamIds.map((teamId, index) => ({
+      tournamentId,
+      teamId,
+      seed: typeof seed === 'number' ? seed + index : null,
+      isConfirmed,
+    }))
+
+    const result = await prisma.tournamentRegistration.createMany({
+      data: rows,
+      skipDuplicates: true,
+    })
+
+    if (result.count === 0) {
+      return { success: false, message: 'Aucune nouvelle equipe ajoutee (deja inscrites).' }
+    }
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'REGISTRATION_ADD',
+      message: result.count > 1 ? `${result.count} equipes inscrites au tournoi.` : 'Equipe inscrite au tournoi.',
+      payload: {
+        teamIds: uniqueTeamIds,
+        insertedCount: result.count,
         isConfirmed,
       },
     })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
-    return { success: true, message: 'Equipe inscrite au tournoi.' }
+    return {
+      success: true,
+      message: result.count > 1 ? `${result.count} equipes inscrites au tournoi.` : 'Equipe inscrite au tournoi.',
+    }
   } catch (error) {
     return { success: false, message: error instanceof Error ? error.message : 'Erreur inscription.' }
   }
@@ -622,7 +1132,20 @@ export async function removeTournamentRegistration(formData: FormData) {
   try {
     await assertOrganizerCanManageTournament(tournamentId)
 
+    const registration = await prisma.tournamentRegistration.findUnique({
+      where: { id: registrationId },
+      select: { id: true, teamId: true, tournamentId: true },
+    })
+    if (!registration || registration.tournamentId !== tournamentId) return
+
     await prisma.tournamentRegistration.delete({ where: { id: registrationId } })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'REGISTRATION_REMOVE',
+      message: 'Inscription d\'equipe retiree.',
+      payload: { registrationId, teamId: registration.teamId },
+    })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
   } catch {
@@ -660,7 +1183,7 @@ export async function createTournamentMatch(
 
     const [phase, pitch] = await Promise.all([
       prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, tournamentId: true } }),
-      prisma.pitch.findUnique({ where: { id: pitchId }, select: { id: true, tournamentId: true } }),
+      prisma.pitch.findUnique({ where: { id: pitchId }, select: { id: true, tournamentId: true, name: true } }),
     ])
 
     if (!phase || phase.tournamentId !== tournamentId) {
@@ -676,6 +1199,8 @@ export async function createTournamentMatch(
       const newEnd = newStart + maxDurationMinutes * 60 * 1000
       const breakMs = teamBreakMinutes * 60 * 1000
 
+      const selectedPitchKey = toPitchResourceKey(pitch.name)
+
       const existingMatches = await prisma.match.findMany({
         where: {
           phase: { tournamentId },
@@ -685,6 +1210,7 @@ export async function createTournamentMatch(
         select: {
           id: true,
           pitchId: true,
+          pitch: { select: { name: true } },
           homeTeamId: true,
           awayTeamId: true,
           scheduledAt: true,
@@ -692,7 +1218,9 @@ export async function createTournamentMatch(
       })
 
       const hasPitchConflict = existingMatches.some((existingMatch) => {
-        if (existingMatch.pitchId !== pitchId || !existingMatch.scheduledAt) return false
+        if (!existingMatch.scheduledAt) return false
+        const existingPitchKey = toPitchResourceKey(existingMatch.pitch.name)
+        if (existingPitchKey !== selectedPitchKey) return false
         const existingStart = existingMatch.scheduledAt.getTime()
         const existingEnd = existingStart + DEFAULT_EXISTING_MATCH_DURATION_MINUTES * 60 * 1000
         return newStart < existingEnd && existingStart < newEnd
@@ -741,6 +1269,21 @@ export async function createTournamentMatch(
       },
     })
 
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_CREATE',
+      message: 'Creation manuelle d\'un match.',
+      payload: {
+        phaseId,
+        pitchId,
+        homeTeamId: homeTeamId || null,
+        awayTeamId: awayTeamId || null,
+        roundNumber: roundNumber ?? null,
+        bracketPos: bracketPos || null,
+        scheduledAt: scheduledAt ? scheduledAt.toISOString() : null,
+      },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
     return { success: true, message: 'Match planifie.' }
   } catch (error) {
@@ -784,7 +1327,7 @@ export async function recordTournamentMatchResult(
 
     const match = await prisma.match.findUnique({
       where: { id: matchId },
-      select: { id: true, homeTeamId: true, awayTeamId: true },
+      select: { id: true, phaseId: true, bracketPos: true, homeTeamId: true, awayTeamId: true },
     })
 
     if (!match) return { success: false, message: 'Match introuvable.' }
@@ -818,6 +1361,14 @@ export async function recordTournamentMatchResult(
           winnerId,
         },
       })
+
+      await propagateWinnerToNextBracketMatch(tx, {
+        phaseId: match.phaseId,
+        bracketPos: match.bracketPos,
+        homeTeamId: match.homeTeamId,
+        awayTeamId: match.awayTeamId,
+        winnerId,
+      })
     })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
@@ -838,9 +1389,84 @@ export async function deleteTournamentMatch(formData: FormData) {
 
     await prisma.match.delete({ where: { id: matchId } })
 
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_DELETE',
+      message: 'Suppression d\'un match.',
+      payload: { matchId },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
   } catch {
     return
+  }
+}
+
+export async function deleteSelectedTournamentMatches(formData: FormData): Promise<ActionState> {
+  const parsed = DeleteSelectedMatchesSchema.safeParse({
+    ...Object.fromEntries(formData),
+    matchIds: formData.getAll('matchIds').map((value) => String(value).trim()).filter(Boolean),
+  })
+  if (!parsed.success) return { success: false, message: 'Selection invalide.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, matchIds } = parsed.data
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+
+    const deleted = await prisma.match.deleteMany({
+      where: {
+        id: { in: matchIds },
+        phase: { tournamentId },
+      },
+    })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_BULK_DELETE',
+      message: `${deleted.count} match(s) supprimes via selection multiple.`,
+      payload: { requestedCount: matchIds.length, deletedCount: deleted.count, matchIds },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    return {
+      success: true,
+      message: deleted.count > 0 ? `${deleted.count} match(s) supprimes.` : 'Aucun match supprime.',
+    }
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Erreur suppression selection.' }
+  }
+}
+
+export async function deleteAllTournamentMatches(formData: FormData): Promise<ActionState> {
+  const parsed = ManageTournamentBaseSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Donnees invalides pour suppression globale.' }
+
+  const { tournamentId, orgSlug, tournamentSlug } = parsed.data
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+
+    const deleted = await prisma.match.deleteMany({
+      where: {
+        phase: { tournamentId },
+      },
+    })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_DELETE_ALL',
+      message: `${deleted.count} match(s) supprimes sur le tournoi.`,
+      payload: { deletedCount: deleted.count },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    return {
+      success: true,
+      message: deleted.count > 0 ? `${deleted.count} match(s) supprimes.` : 'Aucun match a supprimer.',
+    }
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Erreur suppression globale.' }
   }
 }
 
@@ -866,8 +1492,15 @@ export async function generatePhaseRoundRobinMatches(
     await assertPreviousRoutingPhaseCompleted(phaseId, tournamentId)
 
     const [phase, pitches, registrations, existingMatches] = await Promise.all([
-      prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, tournamentId: true } }),
-      prisma.pitch.findMany({ where: { tournamentId }, select: { id: true }, orderBy: { name: 'asc' } }),
+      prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, tournamentId: true, type: true, config: true } }),
+      prisma.pitch.findMany({
+        where: {
+          tournamentId,
+          OR: [{ phaseId }, { phaseId: null }],
+        },
+        select: { id: true, name: true },
+        orderBy: { name: 'asc' },
+      }),
       prisma.tournamentRegistration.findMany({
         where: {
           tournamentId,
@@ -891,60 +1524,112 @@ export async function generatePhaseRoundRobinMatches(
       return { success: false, message: 'Ajoutez au moins une piste avant generation.' }
     }
 
-    const teamIds = registrations.map((registration) => registration.teamId)
-    if (teamIds.length < 2) {
-      return { success: false, message: 'Au moins 2 equipes sont requises.' }
-    }
+    const pitchResources = uniquePitchResources(pitches)
 
-    const pairings = buildRoundRobinPairings(teamIds)
+    const existingScheduledMatches = await prisma.match.findMany({
+      where: {
+        phase: { tournamentId },
+        scheduledAt: { not: null },
+        status: { not: MatchStatus.CANCELLED },
+      },
+      select: {
+        scheduledAt: true,
+        pitch: { select: { name: true } },
+      },
+    })
 
     const startDate = startAt ?? new Date()
     const matchDurationMs = maxDurationMinutes * 60 * 1000
     const teamBreakMs = teamBreakMinutes * 60 * 1000
 
     const pitchAvailableAt = new Map<string, number>(
-      pitches.map((pitch) => [pitch.id, startDate.getTime()])
+      pitchResources.map((pitch) => [pitch.key, startDate.getTime()])
     )
+
+    for (const existingMatch of existingScheduledMatches) {
+      if (!existingMatch.scheduledAt) continue
+      const resourceKey = toPitchResourceKey(existingMatch.pitch.name)
+      if (!pitchAvailableAt.has(resourceKey)) continue
+      const existingEnd = existingMatch.scheduledAt.getTime() + DEFAULT_EXISTING_MATCH_DURATION_MINUTES * 60 * 1000
+      const prev = pitchAvailableAt.get(resourceKey) ?? startDate.getTime()
+      if (existingEnd > prev) {
+        pitchAvailableAt.set(resourceKey, existingEnd)
+      }
+    }
+
     const teamAvailableAt = new Map<string, number>(
-      teamIds.map((teamId) => [teamId, startDate.getTime()])
+      registrations.map((registration) => [registration.teamId, startDate.getTime()])
     )
 
-    const matchesToCreate = pairings.map((pairing) => {
-      const homeReadyAt = teamAvailableAt.get(pairing.homeTeamId) ?? startDate.getTime()
-      const awayReadyAt = teamAvailableAt.get(pairing.awayTeamId) ?? startDate.getTime()
+    const pairingsToSchedule: SchedulablePairing[] = []
 
-      let selectedPitchId = pitches[0]?.id
-      let selectedStart = Number.POSITIVE_INFINITY
+    if (phase.type === PhaseType.GROUP) {
+      const groupConfig = readGroupPhaseConfig(phase.config)
+      const placementGroups = new Map<number, GroupPlacement[]>()
 
-      for (const pitch of pitches) {
-        const pitchReadyAt = pitchAvailableAt.get(pitch.id) ?? startDate.getTime()
-        const candidateStart = Math.max(startDate.getTime(), pitchReadyAt, homeReadyAt, awayReadyAt)
-
-        if (candidateStart < selectedStart) {
-          selectedStart = candidateStart
-          selectedPitchId = pitch.id
-        }
+      for (const placement of groupConfig.placements) {
+        const current = placementGroups.get(placement.groupIndex) ?? []
+        current.push(placement)
+        placementGroups.set(placement.groupIndex, current)
       }
 
-      const matchEnd = selectedStart + matchDurationMs
-      pitchAvailableAt.set(selectedPitchId, matchEnd)
-      teamAvailableAt.set(pairing.homeTeamId, matchEnd + teamBreakMs)
-      teamAvailableAt.set(pairing.awayTeamId, matchEnd + teamBreakMs)
+      const groupsWithTeams = Array.from(placementGroups.entries())
+        .map(([groupIndex, placements]) => ({
+          groupIndex,
+          teamIds: placements.sort((a, b) => a.slot - b.slot).map((item) => item.teamId),
+        }))
+        .filter((group) => group.teamIds.length >= 2)
 
-      return {
-        phaseId,
-        pitchId: selectedPitchId,
-        homeTeamId: pairing.homeTeamId,
-        awayTeamId: pairing.awayTeamId,
-        roundNumber: pairing.round,
-        scheduledAt: new Date(selectedStart),
+      if (groupsWithTeams.length === 0) {
+        return { success: false, message: 'Aucune poule avec au moins 2 equipes placees.' }
       }
+
+      for (const group of groupsWithTeams) {
+        const pairings = buildRoundRobinPairings(group.teamIds)
+        pairings.forEach((pairing, pairingIndex) => {
+          pairingsToSchedule.push({
+            ...pairing,
+            bracketPos: `G${group.groupIndex}-R${pairing.round}-M${pairingIndex + 1}`,
+          })
+        })
+      }
+    } else {
+      const teamIds = registrations.map((registration) => registration.teamId)
+      if (teamIds.length < 2) {
+        return { success: false, message: 'Au moins 2 equipes sont requises.' }
+      }
+
+      const pairings = buildRoundRobinPairings(teamIds)
+      pairingsToSchedule.push(...pairings)
+    }
+
+    const matchesToCreate = scheduleRoundRobinMatches({
+      phaseId,
+      pairings: pairingsToSchedule,
+      pitchResources,
+      startTimeMs: startDate.getTime(),
+      matchDurationMs,
+      teamBreakMs,
+      pitchAvailableAt,
+      teamAvailableAt,
     })
 
     await prisma.match.createMany({ data: matchesToCreate })
 
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_AUTO_GENERATE',
+      message: `${matchesToCreate.length} match(s) generes automatiquement.`,
+      payload: {
+        phaseId,
+        generatedCount: matchesToCreate.length,
+        maxDurationMinutes,
+        teamBreakMinutes,
+      },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
-    return { success: true, message: `${pairings.length} match(s) generes.` }
+    return { success: true, message: `${matchesToCreate.length} match(s) generes.` }
   } catch (error) {
     return { success: false, message: error instanceof Error ? error.message : 'Erreur generation.' }
   }
@@ -1234,7 +1919,7 @@ export async function generateGroupMatchesFromPlacements(
         tournamentId,
         OR: [{ phaseId }, { phaseId: null }],
       },
-      select: { id: true },
+      select: { id: true, name: true },
       orderBy: { name: 'asc' },
     })
 
@@ -1260,70 +1945,91 @@ export async function generateGroupMatchesFromPlacements(
       return { success: false, message: 'Aucune poule avec au moins 2 equipes placees.' }
     }
 
+    const pitchResources = uniquePitchResources(pitches)
+
+    const existingScheduledMatches = await prisma.match.findMany({
+      where: {
+        phase: { tournamentId },
+        scheduledAt: { not: null },
+        status: { not: MatchStatus.CANCELLED },
+      },
+      select: {
+        phaseId: true,
+        scheduledAt: true,
+        pitch: { select: { name: true } },
+      },
+    })
+
+    const effectiveExistingMatches = overwritePhaseMatches
+      ? existingScheduledMatches.filter((match) => match.phaseId !== phaseId)
+      : existingScheduledMatches
+
     const startDate = startAt ?? new Date()
     const matchDurationMs = maxDurationMinutes * 60 * 1000
     const teamBreakMs = teamBreakMinutes * 60 * 1000
 
     const pitchAvailableAt = new Map<string, number>(
-      pitches.map((pitch) => [pitch.id, startDate.getTime()])
+      pitchResources.map((pitch) => [pitch.key, startDate.getTime()])
     )
+
+    for (const existingMatch of effectiveExistingMatches) {
+      if (!existingMatch.scheduledAt) continue
+      const resourceKey = toPitchResourceKey(existingMatch.pitch.name)
+      if (!pitchAvailableAt.has(resourceKey)) continue
+      const existingEnd = existingMatch.scheduledAt.getTime() + DEFAULT_EXISTING_MATCH_DURATION_MINUTES * 60 * 1000
+      const prev = pitchAvailableAt.get(resourceKey) ?? startDate.getTime()
+      if (existingEnd > prev) {
+        pitchAvailableAt.set(resourceKey, existingEnd)
+      }
+    }
+
     const allTeamIds = groupsWithTeams.flatMap((group) => group.teamIds)
     const teamAvailableAt = new Map<string, number>(
       allTeamIds.map((teamId) => [teamId, startDate.getTime()])
     )
 
-    const matchesToCreate: Array<{
-      phaseId: string
-      pitchId: string
-      homeTeamId: string
-      awayTeamId: string
-      roundNumber: number
-      bracketPos: string
-      scheduledAt: Date
-    }> = []
+    const pairingsToSchedule: SchedulablePairing[] = []
 
     for (const group of groupsWithTeams) {
       const pairings = buildRoundRobinPairings(group.teamIds)
 
       pairings.forEach((pairing, pairingIndex) => {
-        const homeReadyAt = teamAvailableAt.get(pairing.homeTeamId) ?? startDate.getTime()
-        const awayReadyAt = teamAvailableAt.get(pairing.awayTeamId) ?? startDate.getTime()
-
-        let selectedPitchId = pitches[0]?.id
-        let selectedStart = Number.POSITIVE_INFINITY
-
-        for (const pitch of pitches) {
-          const pitchReadyAt = pitchAvailableAt.get(pitch.id) ?? startDate.getTime()
-          const candidateStart = Math.max(startDate.getTime(), pitchReadyAt, homeReadyAt, awayReadyAt)
-
-          if (candidateStart < selectedStart) {
-            selectedStart = candidateStart
-            selectedPitchId = pitch.id
-          }
-        }
-
-        const matchEnd = selectedStart + matchDurationMs
-        pitchAvailableAt.set(selectedPitchId, matchEnd)
-        teamAvailableAt.set(pairing.homeTeamId, matchEnd + teamBreakMs)
-        teamAvailableAt.set(pairing.awayTeamId, matchEnd + teamBreakMs)
-
-        matchesToCreate.push({
-          phaseId,
-          pitchId: selectedPitchId,
-          homeTeamId: pairing.homeTeamId,
-          awayTeamId: pairing.awayTeamId,
-          roundNumber: pairing.round,
+        pairingsToSchedule.push({
+          ...pairing,
           bracketPos: `G${group.groupIndex}-R${pairing.round}-M${pairingIndex + 1}`,
-          scheduledAt: new Date(selectedStart),
         })
       })
     }
+
+    const matchesToCreate = scheduleRoundRobinMatches({
+      phaseId,
+      pairings: pairingsToSchedule,
+      pitchResources,
+      startTimeMs: startDate.getTime(),
+      matchDurationMs,
+      teamBreakMs,
+      pitchAvailableAt,
+      teamAvailableAt,
+    })
 
     await prisma.$transaction(async (tx) => {
       if (existingMatchesCount > 0 && overwritePhaseMatches) {
         await tx.match.deleteMany({ where: { phaseId } })
       }
       await tx.match.createMany({ data: matchesToCreate })
+    })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'GROUP_MATCH_GENERATE',
+      message: `${matchesToCreate.length} match(s) de poules generes.`,
+      payload: {
+        phaseId,
+        overwritePhaseMatches,
+        generatedCount: matchesToCreate.length,
+        maxDurationMinutes,
+        teamBreakMinutes,
+      },
     })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
@@ -1375,6 +2081,8 @@ export async function bulkUpdateTournamentMatches(
       },
       select: {
         id: true,
+        phaseId: true,
+        bracketPos: true,
         homeTeamId: true,
         awayTeamId: true,
       },
@@ -1385,28 +2093,48 @@ export async function bulkUpdateTournamentMatches(
     }
 
     const matchById = new Map(matches.map((match) => [match.id, match]))
+    const ops: Prisma.PrismaPromise<unknown>[] = []
+    const finishedWithScores: Array<{
+      matchId: string
+      phaseId: string
+      bracketPos: string | null
+      homeTeamId: string | null
+      awayTeamId: string | null
+      winnerId: string | null
+    }> = []
 
-    await prisma.$transaction(async (tx) => {
-      for (const update of updates) {
-        const match = matchById.get(update.matchId)
-        if (!match) continue
+    for (const update of updates) {
+      const match = matchById.get(update.matchId)
+      if (!match) continue
 
-        if (update.homeScore !== undefined && update.awayScore !== undefined) {
-          const homeScore = update.homeScore
-          const awayScore = update.awayScore
-          let winnerId: string | null = null
-          if (homeScore > awayScore) winnerId = match.homeTeamId ?? null
-          if (awayScore > homeScore) winnerId = match.awayTeamId ?? null
+      if (update.homeScore !== undefined && update.awayScore !== undefined) {
+        const homeScore = update.homeScore
+        const awayScore = update.awayScore
+        let winnerId: string | null = null
+        if (homeScore > awayScore) winnerId = match.homeTeamId ?? null
+        if (awayScore > homeScore) winnerId = match.awayTeamId ?? null
 
-          await tx.match.update({
+        finishedWithScores.push({
+          matchId: update.matchId,
+          phaseId: match.phaseId,
+          bracketPos: match.bracketPos,
+          homeTeamId: match.homeTeamId,
+          awayTeamId: match.awayTeamId,
+          winnerId,
+        })
+
+        ops.push(
+          prisma.match.update({
             where: { id: update.matchId },
             data: {
               status: MatchStatus.FINISHED,
               playedAt: new Date(),
             },
           })
+        )
 
-          await tx.matchResult.upsert({
+        ops.push(
+          prisma.matchResult.upsert({
             where: { matchId: update.matchId },
             update: {
               homeScore,
@@ -1422,16 +2150,44 @@ export async function bulkUpdateTournamentMatches(
               winnerId,
             },
           })
-        } else if (update.status) {
-          await tx.match.update({
+        )
+      } else if (update.status) {
+        ops.push(
+          prisma.match.update({
             where: { id: update.matchId },
             data: {
               status: update.status as MatchStatus,
               ...(update.status === 'FINISHED' ? { playedAt: new Date() } : {}),
             },
           })
-        }
+        )
       }
+    }
+
+    // Execute in chunks to avoid long-lived transactions in dev/hot-reload sessions.
+    const CHUNK_SIZE = 120
+    for (let i = 0; i < ops.length; i += CHUNK_SIZE) {
+      const chunk = ops.slice(i, i + CHUNK_SIZE)
+      await prisma.$transaction(chunk)
+    }
+
+    for (const item of finishedWithScores) {
+      await prisma.$transaction(async (tx) => {
+        await propagateWinnerToNextBracketMatch(tx, {
+          phaseId: item.phaseId,
+          bracketPos: item.bracketPos,
+          homeTeamId: item.homeTeamId,
+          awayTeamId: item.awayTeamId,
+          winnerId: item.winnerId,
+        })
+      })
+    }
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_BULK_UPDATE',
+      message: `${updates.length} match(s) mis a jour en masse.`,
+      payload: { updatedCount: updates.length },
     })
 
     revalidateTournamentPath(orgSlug, tournamentSlug)
@@ -1516,6 +2272,19 @@ export async function closeTournamentPhase(
       })
     })
 
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'PHASE_CLOSE',
+      message: `Phase cloturee: ${phase.name}.`,
+      payload: {
+        phaseId,
+        phaseName: phase.name,
+        forceClose,
+        nextPhaseId: nextPhase?.id ?? null,
+        tournamentFinished: allCompleted,
+      },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
     if (allCompleted) {
       return { success: true, message: 'Phase cloturee. Les qualifies ont ete places. Tournoi termine.' }
@@ -1549,6 +2318,7 @@ export async function generateCustomPlacementBracketMatches(
     tournamentSlug,
     phaseId,
     participantsCount,
+    startAt,
     includeLosersReplay,
     overwritePhaseMatches,
   } = parsed.data
@@ -1577,14 +2347,21 @@ export async function generateCustomPlacementBracketMatches(
       }
     }
 
-    const pitches = await prisma.pitch.findMany({
-      where: {
-        tournamentId,
-        OR: [{ phaseId }, { phaseId: null }],
-      },
-      select: { id: true },
-      orderBy: { name: 'asc' },
-    })
+    const [pitches, registrations] = await Promise.all([
+      prisma.pitch.findMany({
+        where: {
+          tournamentId,
+          OR: [{ phaseId }, { phaseId: null }],
+        },
+        select: { id: true },
+        orderBy: { name: 'asc' },
+      }),
+      prisma.tournamentRegistration.findMany({
+        where: { tournamentId },
+        select: { teamId: true, isConfirmed: true, seed: true, registeredAt: true },
+        orderBy: [{ isConfirmed: 'desc' }, { seed: 'asc' }, { registeredAt: 'asc' }],
+      }),
+    ])
 
     if (pitches.length === 0) {
       return { success: false, message: 'Ajoutez au moins une piste associee au tournoi/phase.' }
@@ -1597,12 +2374,17 @@ export async function generateCustomPlacementBracketMatches(
 
     const rounds = Math.ceil(Math.log2(participantsCount))
     const normalizedSize = 2 ** rounds
+    const baseStartMs = startAt ? startAt.getTime() : null
+    const roundDurationMs = 30 * 60 * 1000
 
     const skeleton: Array<{
       phaseId: string
       pitchId: string
       roundNumber: number
       bracketPos: string
+      homeTeamId?: string | null
+      awayTeamId?: string | null
+      scheduledAt?: Date | null
     }> = []
 
     let pitchCursor = 0
@@ -1614,6 +2396,7 @@ export async function generateCustomPlacementBracketMatches(
           pitchId: pitches[pitchCursor % pitches.length].id,
           roundNumber: round,
           bracketPos: `WB-R${round}-M${matchNo}`,
+          ...(baseStartMs !== null ? { scheduledAt: new Date(baseStartMs + (round - 1) * roundDurationMs) } : {}),
         })
         pitchCursor += 1
       }
@@ -1628,6 +2411,7 @@ export async function generateCustomPlacementBracketMatches(
             pitchId: pitches[pitchCursor % pitches.length].id,
             roundNumber: rounds + round,
             bracketPos: `LB-R${round}-M${matchNo}`,
+            ...(baseStartMs !== null ? { scheduledAt: new Date(baseStartMs + (rounds + round - 1) * roundDurationMs) } : {}),
           })
           pitchCursor += 1
         }
@@ -1641,9 +2425,26 @@ export async function generateCustomPlacementBracketMatches(
           pitchId: pitches[pitchCursor % pitches.length].id,
           roundNumber: rounds + 10,
           bracketPos: `P${place}-P${place + 1}`,
+          ...(baseStartMs !== null ? { scheduledAt: new Date(baseStartMs + (rounds + 9) * roundDurationMs) } : {}),
         })
         pitchCursor += 1
       }
+    }
+
+    const seededTeamIds = registrations
+      .map((r) => r.teamId)
+      .slice(0, participantsCount)
+
+    const firstRoundMatches = skeleton
+      .filter((m) => m.roundNumber === 1 && m.bracketPos.startsWith('WB-R1-'))
+      .sort((a, b) => a.bracketPos.localeCompare(b.bracketPos))
+
+    for (let i = 0; i < firstRoundMatches.length; i += 1) {
+      const slot = firstRoundMatches[i]
+      const home = seededTeamIds[i * 2] ?? null
+      const away = seededTeamIds[i * 2 + 1] ?? null
+      slot.homeTeamId = home
+      slot.awayTeamId = away
     }
 
     await prisma.$transaction(async (tx) => {
@@ -1653,12 +2454,387 @@ export async function generateCustomPlacementBracketMatches(
       await tx.match.createMany({ data: skeleton })
     })
 
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'BRACKET_GENERATE',
+      message: `${skeleton.length} match(s) de bracket generes. ${Math.min(seededTeamIds.length, normalizedSize)} equipe(s) assignee(s) automatiquement.`,
+      payload: {
+        phaseId,
+        participantsCount,
+        startAt: startAt ? startAt.toISOString() : null,
+        includeLosersReplay,
+        overwritePhaseMatches,
+        generatedCount: skeleton.length,
+        autoAssignedTeams: Math.min(seededTeamIds.length, normalizedSize),
+      },
+    })
+
     revalidateTournamentPath(orgSlug, tournamentSlug)
-    return { success: true, message: `${skeleton.length} match(s) de bracket personnalise generes.` }
+    return { success: true, message: `${skeleton.length} match(s) de bracket personnalise generes (${Math.min(seededTeamIds.length, normalizedSize)} equipe(s) assignee(s)).` }
   } catch (error) {
     return {
       success: false,
       message: error instanceof Error ? error.message : 'Erreur generation bracket personnalise.',
+    }
+  }
+}
+
+// ─── Bulk create matches ───────────────────────────────────────────────────────
+
+type BulkMatchInput = {
+  scheduledAt: string | null
+  pitchName: string
+  homeTeamName: string
+  awayTeamName: string
+}
+
+export async function bulkCreateTournamentMatches(
+  formData: FormData
+): Promise<ActionState & { created?: number; skippedLines?: string[] }> {
+  const parsed = BulkCreateMatchesSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Donnees invalides pour la creation groupee.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, phaseId, matchesJson, maxDurationMinutes, teamBreakMinutes } =
+    parsed.data
+
+  let inputs: BulkMatchInput[]
+  try {
+    const raw = JSON.parse(matchesJson)
+    if (!Array.isArray(raw)) throw new Error()
+    inputs = raw as BulkMatchInput[]
+  } catch {
+    return { success: false, message: 'Format JSON invalide.' }
+  }
+
+  if (inputs.length === 0) return { success: false, message: 'Aucun match a creer.' }
+  if (inputs.length > 200) return { success: false, message: 'Maximum 200 matchs par import.' }
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+
+    const [phase, pitches, registrations] = await Promise.all([
+      prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, tournamentId: true } }),
+      prisma.pitch.findMany({
+        where: { tournamentId },
+        select: { id: true, name: true, phaseId: true },
+      }),
+      prisma.tournamentRegistration.findMany({
+        where: { tournamentId },
+        select: { teamId: true, team: { select: { id: true, name: true } } },
+      }),
+    ])
+
+    if (!phase || phase.tournamentId !== tournamentId) {
+      return { success: false, message: 'Phase invalide pour ce tournoi.' }
+    }
+
+    // Group pitches by normalised name — a logical pitch may have one DB row per phase
+    const pitchGroupsByName = new Map<string, typeof pitches>()
+    for (const p of pitches) {
+      const key = p.name.toLowerCase().trim()
+      if (!pitchGroupsByName.has(key)) pitchGroupsByName.set(key, [])
+      pitchGroupsByName.get(key)!.push(p)
+    }
+
+    // Pick the most relevant pitch row for the target phase:
+    // 1. same phaseId  2. phaseId null (available for all)  3. any
+    function bestPitchInGroup(group: typeof pitches) {
+      return (
+        group.find((p) => p.phaseId === phaseId) ??
+        group.find((p) => p.phaseId === null) ??
+        group[0]
+      )
+    }
+
+    const teamByName = new Map(
+      registrations.map((r) => [r.team.name.toLowerCase().trim(), r.team])
+    )
+
+    function resolveTeam(query: string) {
+      const key = query.toLowerCase().trim()
+      if (!key) return null
+      const exact = teamByName.get(key)
+      if (exact) return exact
+      for (const [name, team] of teamByName) {
+        if (name.includes(key)) return team
+      }
+      return null
+    }
+
+    function resolvePitch(query: string) {
+      const key = query.toLowerCase().trim()
+      if (!key) return null
+      const exactGroup = pitchGroupsByName.get(key)
+      if (exactGroup) return bestPitchInGroup(exactGroup)
+      for (const [name, group] of pitchGroupsByName) {
+        if (name.includes(key)) return bestPitchInGroup(group)
+      }
+      return null
+    }
+
+    const skippedLines: string[] = []
+    const toCreate: Array<{
+      phaseId: string
+      pitchId: string
+      homeTeamId: string | null
+      awayTeamId: string | null
+      scheduledAt: Date | null
+    }> = []
+
+    for (let i = 0; i < inputs.length; i++) {
+      const input = inputs[i]
+      const lineLabel = `Ligne ${i + 1}`
+
+      const pitch = resolvePitch(input.pitchName)
+      if (!pitch) {
+        skippedLines.push(`${lineLabel}: piste introuvable "${input.pitchName}"`)
+        continue
+      }
+
+      const homeTeam = input.homeTeamName ? resolveTeam(input.homeTeamName) : null
+      const awayTeam = input.awayTeamName ? resolveTeam(input.awayTeamName) : null
+
+      if (input.homeTeamName && !homeTeam) {
+        skippedLines.push(`${lineLabel}: equipe domicile introuvable "${input.homeTeamName}"`)
+        continue
+      }
+      if (input.awayTeamName && !awayTeam) {
+        skippedLines.push(`${lineLabel}: equipe exterieur introuvable "${input.awayTeamName}"`)
+        continue
+      }
+
+      if (homeTeam && awayTeam && homeTeam.id === awayTeam.id) {
+        skippedLines.push(`${lineLabel}: les deux equipes sont identiques`)
+        continue
+      }
+
+      let scheduledAt: Date | null = null
+      if (input.scheduledAt) {
+        const d = new Date(input.scheduledAt)
+        scheduledAt = Number.isNaN(d.getTime()) ? null : d
+      }
+
+      toCreate.push({
+        phaseId,
+        pitchId: pitch.id,
+        homeTeamId: homeTeam?.id ?? null,
+        awayTeamId: awayTeam?.id ?? null,
+        scheduledAt,
+      })
+    }
+
+    if (toCreate.length === 0) {
+      return {
+        success: false,
+        message: 'Aucun match valide a creer.',
+        skippedLines,
+      }
+    }
+
+    // Check pitch conflicts for scheduled matches
+    const scheduledInputs = toCreate.filter((m) => m.scheduledAt !== null)
+    if (scheduledInputs.length > 0) {
+      const existingMatches = await prisma.match.findMany({
+        where: {
+          phase: { tournamentId },
+          scheduledAt: { not: null },
+          status: { not: MatchStatus.CANCELLED },
+        },
+        select: {
+          pitchId: true,
+          pitch: { select: { name: true } },
+          homeTeamId: true,
+          awayTeamId: true,
+          scheduledAt: true,
+        },
+      })
+
+      for (let i = 0; i < toCreate.length; i++) {
+        const m = toCreate[i]
+        if (!m.scheduledAt) continue
+        const newStart = m.scheduledAt.getTime()
+        const newEnd = newStart + maxDurationMinutes * 60_000
+        const breakMs = teamBreakMinutes * 60_000
+
+        const hasPitchConflict = existingMatches.some((ex) => {
+          if (!ex.scheduledAt || ex.pitchId !== m.pitchId) return false
+          const exStart = ex.scheduledAt.getTime()
+          const exEnd = exStart + DEFAULT_EXISTING_MATCH_DURATION_MINUTES * 60_000
+          return newStart < exEnd && exStart < newEnd
+        })
+
+        if (hasPitchConflict) {
+          skippedLines.push(`Ligne ${i + 1}: conflit de piste sur ce creneau`)
+          toCreate.splice(i, 1)
+          i--
+          continue
+        }
+
+        const involvedTeamIds = [m.homeTeamId, m.awayTeamId].filter(Boolean) as string[]
+        if (involvedTeamIds.length > 0) {
+          const hasTeamConflict = existingMatches.some((ex) => {
+            if (!ex.scheduledAt) return false
+            const exTeamIds = [ex.homeTeamId, ex.awayTeamId].filter(Boolean) as string[]
+            if (!involvedTeamIds.some((id) => exTeamIds.includes(id))) return false
+            const exStart = ex.scheduledAt.getTime()
+            const exEnd = exStart + DEFAULT_EXISTING_MATCH_DURATION_MINUTES * 60_000
+            return (newStart - breakMs) < exEnd && exStart < (newEnd + breakMs)
+          })
+
+          if (hasTeamConflict) {
+            skippedLines.push(`Ligne ${i + 1}: conflit d'equipe (temps de battement insuffisant)`)
+            toCreate.splice(i, 1)
+            i--
+            continue
+          }
+        }
+      }
+    }
+
+    if (toCreate.length === 0) {
+      return {
+        success: false,
+        message: 'Aucun match valide apres verification des conflits.',
+        skippedLines,
+      }
+    }
+
+    await prisma.match.createMany({ data: toCreate })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_BULK_CREATE',
+      message: `${toCreate.length} match(s) crees via ajout groupe.`,
+      payload: {
+        phaseId,
+        createdCount: toCreate.length,
+        skippedCount: skippedLines.length,
+        maxDurationMinutes,
+        teamBreakMinutes,
+      },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+
+    const skippedMsg = skippedLines.length > 0 ? ` (${skippedLines.length} ligne(s) ignoree(s))` : ''
+    return {
+      success: true,
+      message: `${toCreate.length} match(s) crees avec succes.${skippedMsg}`,
+      created: toCreate.length,
+      skippedLines,
+    }
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Erreur lors de la creation groupee.',
+    }
+  }
+}
+
+export async function bulkAssignBracketSeeds(
+  prevState: ActionState,
+  formData: FormData
+): Promise<ActionState> {
+  void prevState
+  const parsed = BulkBracketSeedAssignSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Donnees invalides pour l\'affectation du bracket.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, phaseId, seedsJson } = parsed.data
+
+  let rawSeeds: unknown
+  try {
+    rawSeeds = JSON.parse(seedsJson)
+  } catch {
+    return { success: false, message: 'Format JSON invalide pour les seeds.' }
+  }
+
+  if (!Array.isArray(rawSeeds)) {
+    return { success: false, message: 'Liste des seeds invalide.' }
+  }
+
+  const normalized = z.array(BracketSeedAssignItemSchema).safeParse(rawSeeds)
+  if (!normalized.success) {
+    return { success: false, message: 'Certaines lignes de seed sont invalides.' }
+  }
+
+  const seeds = normalized.data
+  if (seeds.length === 0) return { success: false, message: 'Aucune modification a sauvegarder.' }
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+
+    const [phase, tournamentTeams, matchesToSeed] = await Promise.all([
+      prisma.phase.findUnique({ where: { id: phaseId }, select: { id: true, tournamentId: true } }),
+      prisma.tournamentRegistration.findMany({ where: { tournamentId }, select: { teamId: true } }),
+      prisma.match.findMany({
+        where: {
+          id: { in: seeds.map((s) => s.matchId) },
+          phaseId,
+          roundNumber: 1,
+        },
+        select: { id: true },
+      }),
+    ])
+
+    if (!phase || phase.tournamentId !== tournamentId) {
+      return { success: false, message: 'Phase invalide pour ce tournoi.' }
+    }
+
+    if (matchesToSeed.length !== seeds.length) {
+      return { success: false, message: 'Certains matchs ne sont pas valides pour le seed round 1.' }
+    }
+
+    const allowedTeamIds = new Set(tournamentTeams.map((t) => t.teamId))
+
+    const usedTeamIds: string[] = []
+    for (const row of seeds) {
+      const home = row.homeTeamId || null
+      const away = row.awayTeamId || null
+
+      if (home && !allowedTeamIds.has(home)) {
+        return { success: false, message: 'Equipe domicile invalide dans la selection.' }
+      }
+      if (away && !allowedTeamIds.has(away)) {
+        return { success: false, message: 'Equipe exterieur invalide dans la selection.' }
+      }
+      if (home && away && home === away) {
+        return { success: false, message: 'Une equipe ne peut pas etre des deux cotes du meme match.' }
+      }
+
+      if (home) usedTeamIds.push(home)
+      if (away) usedTeamIds.push(away)
+    }
+
+    const uniqueUsed = new Set(usedTeamIds)
+    if (uniqueUsed.size !== usedTeamIds.length) {
+      return { success: false, message: 'Une meme equipe est assignee plusieurs fois au round 1.' }
+    }
+
+    await prisma.$transaction(
+      seeds.map((row) =>
+        prisma.match.update({
+          where: { id: row.matchId },
+          data: {
+            homeTeamId: row.homeTeamId || null,
+            awayTeamId: row.awayTeamId || null,
+          },
+        })
+      )
+    )
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'BRACKET_SEED_UPDATE',
+      message: `${seeds.length} match(s) de round 1 re-seedes.`,
+      payload: { phaseId, updatedMatches: seeds.length },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    return { success: true, message: 'Seed du bracket mis a jour.' }
+  } catch (error) {
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Erreur lors de l\'affectation du bracket.',
     }
   }
 }

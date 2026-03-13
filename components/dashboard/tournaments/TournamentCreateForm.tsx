@@ -32,6 +32,7 @@ type PhaseUI = {
   name: string
   type: PhaseType
   order: number
+  parallelGroup: string
   routes: RouteUI[]
 }
 
@@ -64,6 +65,7 @@ const createPhase = (index: number): PhaseUI => ({
   name: `Phase ${index}`,
   type: 'GROUP',
   order: index,
+  parallelGroup: '',
   routes: [],
 })
 
@@ -84,6 +86,7 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
       name: 'Poule A',
       type: 'GROUP',
       order: 1,
+      parallelGroup: '',
       routes: [createRoute('bracket-a')],
     },
     {
@@ -92,6 +95,7 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
       name: 'Bracket A',
       type: 'BRACKET_SINGLE',
       order: 2,
+      parallelGroup: '',
       routes: [],
     },
   ])
@@ -104,6 +108,9 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
           name: phase.name.trim(),
           type: phase.type,
           order: Number(phase.order),
+          config: phase.parallelGroup.trim()
+            ? { parallelGroup: phase.parallelGroup.trim() }
+            : undefined,
           routes: phase.routes.map((route) => ({
             toPhaseKey: route.toPhaseKey,
             rule: route.rule,
@@ -342,6 +349,9 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
               <p className="mt-2 text-sm text-slate-400">
                 Ajoute librement des phases et des regles de qualification. Exemple: top 2 vers bracket A, bottom 2 vers bracket B.
               </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Pour des phases simultanees (ex: Bracket A et Bracket B), utilisez le meme ordre et le meme groupe parallele.
+              </p>
             </div>
             <button
               type="button"
@@ -368,7 +378,7 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
                   </button>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-4">
+                <div className="grid gap-3 md:grid-cols-5">
                   <div>
                     <label className="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Code phase</label>
                     <input
@@ -410,6 +420,15 @@ export default function TournamentCreateForm({ organizationId, orgSlug, games }:
                       value={phase.order}
                       onChange={(e) => updatePhase(phase.id, { order: Number(e.target.value) || 1 })}
                       className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[11px] uppercase tracking-wider text-slate-500">Groupe parallele</label>
+                    <input
+                      value={phase.parallelGroup}
+                      onChange={(e) => updatePhase(phase.id, { parallelGroup: slugify(e.target.value) })}
+                      className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+                      placeholder="bracket-ab"
                     />
                   </div>
                 </div>
