@@ -87,7 +87,7 @@ export default function BracketSeedEditor({
         <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-3">
             <div className="flex items-center justify-between">
                 <div>
-                    <h4 className="text-sm font-semibold">Affectation des equipes (Round 1)</h4>
+                    <h4 className="text-sm font-semibold">Affectation des équipes (Round 1)</h4>
                     <p className="text-[11px] text-slate-500">Auto-assigne a la generation, puis modifiable avant de lancer les matchs.</p>
                 </div>
                 <form action={formAction} className="flex items-center gap-2">

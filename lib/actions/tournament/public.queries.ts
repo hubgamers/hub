@@ -2,6 +2,10 @@ import { cache } from 'react'
 import { MatchStatus } from '@prisma/client'
 import { prisma } from '@/lib/prisma'
 
+function comparePitchNames(a: string, b: string) {
+    return a.localeCompare(b, 'fr', { numeric: true, sensitivity: 'base' })
+}
+
 export type PublicMatch = {
     id: string
     status: MatchStatus
@@ -77,7 +81,12 @@ export const getPublicTournamentBySlugs = cache(async (orgSlug: string, tourname
         orderBy: [{ status: 'asc' }, { scheduledAt: 'asc' }, { createdAt: 'desc' }],
     })
 
-    return { tournament, matches }
+    const sortedTournament = {
+        ...tournament,
+        pitches: [...tournament.pitches].sort((a, b) => comparePitchNames(a.name, b.name)),
+    }
+
+    return { tournament: sortedTournament, matches }
 })
 
 export function computeTournamentStandings(

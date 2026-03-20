@@ -126,7 +126,7 @@ export default function TeamCreateForm({ organizationId, organizationName, orgSl
                         href={`/dashboard/org/${orgSlug}/teams`}
                         className="inline-flex items-center justify-center rounded-xl border border-slate-300 px-5 py-3 text-sm font-semibold hover:bg-white"
                     >
-                        Retour aux equipes
+                        Retour aux équipes
                     </a>
                 </div>
             </form>

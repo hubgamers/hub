@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useEffect, useMemo, useState } from "react";
 import { bulkSetGroupPlacements } from "@/lib/actions/tournament-management.actions";
 
 type Placement = {
@@ -53,6 +53,10 @@ export default function GroupPlacementBoard({
     }, [placements]);
 
     const [assignments, setAssignments] = useState<Record<string, string>>(initialMap);
+
+    useEffect(() => {
+        setAssignments(initialMap);
+    }, [initialMap]);
 
     const teamNameById = useMemo(() => new Map(teamOptions.map((team) => [team.id, team.name])), [teamOptions]);
 
@@ -127,10 +131,10 @@ export default function GroupPlacementBoard({
             )}
 
             <div className="sticky top-3 z-20 rounded-md border border-slate-200 bg-white/90 p-2 backdrop-blur">
-                <p className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">Equipes non placees</p>
+                <p className="mb-2 text-[11px] uppercase tracking-wider text-slate-500">Équipes non placees</p>
                 <div className="flex max-h-36 flex-wrap gap-2 overflow-y-auto pr-1">
                     {unassignedTeams.length === 0 ? (
-                        <span className="text-xs text-slate-500">Toutes les equipes sont placees.</span>
+                        <span className="text-xs text-slate-500">Toutes les équipes sont placees.</span>
                     ) : (
                         unassignedTeams.map((team) => (
                             <div

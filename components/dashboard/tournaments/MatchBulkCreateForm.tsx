@@ -199,7 +199,7 @@ export default function MatchBulkCreateForm({ tournamentId, orgSlug, tournamentS
                     </div>
                 </div>
                 <p className="mt-2 text-slate-500">
-                    Equipes connues : {teams.map((t) => t.name).join(', ') || 'aucune'}
+                    Équipes connues : {teams.map((t) => t.name).join(', ') || 'aucune'}
                 </p>
                 <p className="text-slate-500">
                     Pistes connues : {pitches.map((p) => p.name).join(', ') || 'aucune'}

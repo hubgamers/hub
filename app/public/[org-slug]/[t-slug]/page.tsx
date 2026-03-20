@@ -58,7 +58,7 @@ export default async function PublicTournamentPage({
 
                 <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
                     <div className="rounded-xl border border-slate-200 bg-white p-4">
-                        <p className="text-xs uppercase text-slate-500">Equipes</p>
+                        <p className="text-xs uppercase text-slate-500">Équipes</p>
                         <p className="mt-2 text-3xl font-black">{tournament.registrations.length}</p>
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-white p-4">

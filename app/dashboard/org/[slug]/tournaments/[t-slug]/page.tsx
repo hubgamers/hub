@@ -3,6 +3,10 @@ import { getOrganizationBySlug } from '@/lib/actions/organization/organization.q
 import { prisma } from '@/lib/prisma'
 import TournamentTabShell from '@/components/dashboard/tournaments/TournamentTabShell'
 
+function comparePitchNames(a: string, b: string) {
+    return a.localeCompare(b, 'fr', { numeric: true, sensitivity: 'base' })
+}
+
 export default async function DashboardOrgTournamentDetails({
     params,
 }: {
@@ -80,6 +84,8 @@ export default async function DashboardOrgTournamentDetails({
         orderBy: [{ scheduledAt: 'asc' }, { createdAt: 'desc' }],
     })
 
+    const sortedPitches = [...tournament.pitches].sort((a, b) => comparePitchNames(a.name, b.name))
+
     const registeredTeamIds = new Set(tournament.registrations.map((r) => r.teamId))
     const availableTeamsForRegistration = tournament.organization.teams.filter((t) => !registeredTeamIds.has(t.id))
 
@@ -104,7 +110,7 @@ export default async function DashboardOrgTournamentDetails({
                         isCompleted: p.isCompleted,
                         config: p.config,
                     })),
-                    pitches: tournament.pitches.map((p) => ({
+                    pitches: sortedPitches.map((p) => ({
                         id: p.id,
                         name: p.name,
                         phase: p.phase,
