@@ -10,6 +10,16 @@ import PoolsOverlayCarousel from './PoolsOverlayCarousel'
 type OverlaySearchParams = {
     rotate?: string | string[]
     refresh?: string | string[]
+    timer?: string | string[]
+    startedAt?: string | string[]
+}
+
+type LaunchSlotPayload = {
+    slotAt?: string
+    startedAt?: string
+    timerMinutes?: number
+    launchedStatus?: string
+    timerKind?: 'MATCH' | 'BREAK'
 }
 
 type PhaseRouteConfig = {
@@ -101,6 +111,11 @@ function parseIntervalSeconds(
     return Math.max(minSeconds, Math.min(maxSeconds, Math.round(parsed)))
 }
 
+function readLaunchSlotPayload(value: unknown): LaunchSlotPayload | null {
+    if (!value || typeof value !== 'object') return null
+    return value as LaunchSlotPayload
+}
+
 export const dynamic = 'force-dynamic'
 
 export default async function TournamentPoolsOverlayPage({
@@ -114,6 +129,9 @@ export default async function TournamentPoolsOverlayPage({
     const query = await searchParams
     const rotateSeconds = parseIntervalSeconds(firstParam(query.rotate), 20, 5, 120)
     const refreshSeconds = parseIntervalSeconds(firstParam(query.refresh), 10, 3, 120)
+    const timerSecondsFromQuery = parseIntervalSeconds(firstParam(query.timer), 0, 0, 7200)
+    const startedAtRaw = firstParam(query.startedAt)
+    const startedAtMs = startedAtRaw ? new Date(startedAtRaw).getTime() : NaN
     const rotationMs = rotateSeconds * 1000
     const refreshMs = refreshSeconds * 1000
 
@@ -121,6 +139,42 @@ export default async function TournamentPoolsOverlayPage({
     if (!payload) notFound()
 
     const { tournament, matches } = payload
+    const latestTimerEvent = tournament.actionLogs.find((log) => {
+        const launch = readLaunchSlotPayload(log.payload)
+        if (!launch || typeof launch.timerMinutes !== 'number') return false
+        if (log.actionType === 'TIMER_CONTROL' && launch.timerKind === 'BREAK') return true
+        if (log.actionType === 'MATCH_BULK_UPDATE' && launch.launchedStatus === 'LIVE' && typeof launch.slotAt === 'string') return true
+        return false
+    })
+
+    const latestLaunchPayload = latestTimerEvent ? readLaunchSlotPayload(latestTimerEvent.payload) : null
+    const timerKind = latestLaunchPayload?.timerKind === 'BREAK' ? 'BREAK' : 'MATCH'
+    const latestLaunchSlotAtMs = latestLaunchPayload?.slotAt ? new Date(latestLaunchPayload.slotAt).getTime() : NaN
+    const latestLaunchStartedAtMs = latestLaunchPayload?.startedAt ? new Date(latestLaunchPayload.startedAt).getTime() : NaN
+    const latestLaunchCreatedAtMs = latestTimerEvent ? new Date(latestTimerEvent.createdAt).getTime() : NaN
+    const latestLaunchTimerSeconds = typeof latestLaunchPayload?.timerMinutes === 'number'
+        ? Math.max(0, Math.min(7200, Math.round(latestLaunchPayload.timerMinutes * 60)))
+        : 0
+
+    const hasLaunchLog = latestLaunchPayload !== null
+    const timerSeconds = hasLaunchLog
+        ? latestLaunchTimerSeconds
+        : timerSecondsFromQuery
+    const rawTimerStartMs = hasLaunchLog
+        ? (Number.isFinite(latestLaunchStartedAtMs)
+            ? latestLaunchStartedAtMs
+            : (Number.isFinite(latestLaunchCreatedAtMs) ? latestLaunchCreatedAtMs : latestLaunchSlotAtMs))
+        : startedAtMs
+
+    // Guard against bad future timestamps that can produce absurd values like XXXXX:XX.
+    const maxAcceptedFutureMs = Date.now() + 5 * 60 * 1000
+    const resolvedTimerStartMs = Number.isFinite(rawTimerStartMs) && rawTimerStartMs <= maxAcceptedFutureMs
+        ? rawTimerStartMs
+        : (Number.isFinite(latestLaunchCreatedAtMs) ? latestLaunchCreatedAtMs : Date.now())
+
+    const timerStartMs = Number.isFinite(resolvedTimerStartMs) ? resolvedTimerStartMs : null
+    const activeSlotAtMs = timerKind === 'MATCH' && Number.isFinite(latestLaunchSlotAtMs) ? latestLaunchSlotAtMs : NaN
+
     const groupOverviews = computeGroupOverviews(tournament.registrations, tournament.phases, matches)
     const phaseNameById = new Map(tournament.phases.map((phase) => [phase.id, phase.name]))
     const cards = groupOverviews.flatMap((phase) =>
@@ -155,6 +209,11 @@ export default async function TournamentPoolsOverlayPage({
                     awayTeamName: match.awayTeam?.name ?? 'TBD',
                     homeScore: match.result?.homeScore ?? null,
                     awayScore: match.result?.awayScore ?? null,
+                    isActiveSlotLive:
+                        Number.isFinite(activeSlotAtMs) &&
+                        match.status === 'LIVE' &&
+                        match.scheduledAt !== null &&
+                        match.scheduledAt.getTime() === activeSlotAtMs,
                 })),
             }
         })
@@ -190,7 +249,14 @@ export default async function TournamentPoolsOverlayPage({
                     </div>
                 </main>
             ) : (
-                <PoolsOverlayCarousel cards={cards} rotationMs={rotationMs} refreshMs={refreshMs} />
+                <PoolsOverlayCarousel
+                    cards={cards}
+                    rotationMs={rotationMs}
+                    refreshMs={refreshMs}
+                    timerSeconds={timerSeconds}
+                    timerStartMs={timerStartMs}
+                    timerMode={timerKind}
+                />
             )}
         </>
     )

@@ -103,6 +103,25 @@ const MatchStatusSchema = ManageTournamentBaseSchema.extend({
   status: z.enum(['SCHEDULED', 'LIVE', 'FINISHED', 'CANCELLED']),
 })
 
+const StartMatchesByScheduleSlotSchema = ManageTournamentBaseSchema.extend({
+  slotAt: z.preprocess((value) => {
+    if (value === '' || value === null || value === undefined) return undefined
+    const date = new Date(String(value))
+    return Number.isNaN(date.getTime()) ? undefined : date
+  }, z.date()),
+  timerMinutes: z.preprocess(
+    (value) => (value === '' || value === null || value === undefined ? 30 : Number(value)),
+    z.number().int().min(1).max(600)
+  ),
+})
+
+const StartTournamentBreakTimerSchema = ManageTournamentBaseSchema.extend({
+  breakMinutes: z.preprocess(
+    (value) => (value === '' || value === null || value === undefined ? 5 : Number(value)),
+    z.number().int().min(1).max(240)
+  ),
+})
+
 const DeleteMatchSchema = ManageTournamentBaseSchema.extend({
   matchId: z.string().uuid(),
 })
@@ -1013,6 +1032,7 @@ export async function createTournamentPitch(
 
   try {
     await assertOrganizerCanManageTournament(tournamentId)
+    const startedAt = new Date()
 
     if (uniquePhaseIds.length > 0) {
       const phases = await prisma.phase.findMany({
@@ -1972,6 +1992,89 @@ export async function updateTournamentMatchStatus(
     return { success: true, message: 'Statut match mis a jour.' }
   } catch (error) {
     return { success: false, message: error instanceof Error ? error.message : 'Erreur statut match.' }
+  }
+}
+
+export async function startTournamentMatchesByScheduleSlot(
+  formData: FormData
+): Promise<ActionState> {
+  const parsed = StartMatchesByScheduleSlotSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Creneau invalide.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, slotAt, timerMinutes } = parsed.data
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+    const startedAt = new Date()
+
+    const scheduledMatches = await prisma.match.findMany({
+      where: {
+        phase: { tournamentId },
+        scheduledAt: slotAt,
+        status: MatchStatus.SCHEDULED,
+      },
+      select: { id: true },
+    })
+
+    if (scheduledMatches.length === 0) {
+      return { success: false, message: 'Aucun match planifie a lancer pour ce creneau.' }
+    }
+
+    const matchIds = scheduledMatches.map((match) => match.id)
+
+    await prisma.match.updateMany({
+      where: { id: { in: matchIds } },
+      data: { status: MatchStatus.LIVE },
+    })
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'MATCH_BULK_UPDATE',
+      message: `${matchIds.length} match(s) lances pour le creneau ${slotAt.toISOString()}.`,
+      payload: {
+        updatedCount: matchIds.length,
+        slotAt: slotAt.toISOString(),
+        startedAt: startedAt.toISOString(),
+        launchedStatus: 'LIVE',
+        timerKind: 'MATCH',
+        timerMinutes,
+      },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    return { success: true, message: `${matchIds.length} match(s) lances pour ce creneau.` }
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Erreur lancement creneau.' }
+  }
+}
+
+export async function startTournamentBreakTimer(
+  formData: FormData
+): Promise<ActionState> {
+  const parsed = StartTournamentBreakTimerSchema.safeParse(Object.fromEntries(formData))
+  if (!parsed.success) return { success: false, message: 'Temps de battement invalide.' }
+
+  const { tournamentId, orgSlug, tournamentSlug, breakMinutes } = parsed.data
+
+  try {
+    await assertOrganizerCanManageTournament(tournamentId)
+    const startedAt = new Date()
+
+    await recordTournamentAction({
+      tournamentId,
+      actionType: 'TIMER_CONTROL',
+      message: `Timer de battement lance (${breakMinutes} min).`,
+      payload: {
+        startedAt: startedAt.toISOString(),
+        timerMinutes: breakMinutes,
+        timerKind: 'BREAK',
+      },
+    })
+
+    revalidateTournamentPath(orgSlug, tournamentSlug)
+    return { success: true, message: `Timer de battement lance pour ${breakMinutes} min.` }
+  } catch (error) {
+    return { success: false, message: error instanceof Error ? error.message : 'Erreur timer de battement.' }
   }
 }
 

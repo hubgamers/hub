@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useActionState, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useActionState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useFormStatus } from 'react-dom'
 import {
@@ -22,6 +22,8 @@ import {
     generatePhaseRoundRobinMatches,
     removeTournamentRegistration,
     resetTournamentForReconfiguration,
+    startTournamentBreakTimer,
+    startTournamentMatchesByScheduleSlot,
     updateTournamentRegistrationConfirmation,
 } from '@/lib/actions/tournament-management.actions'
 import GroupPlacementBoard from './GroupPlacementBoard'
@@ -77,6 +79,18 @@ type GroupConfig = { count: number; teamsPerGroup: number; placements: GroupPlac
 type InlineActionState = {
     success?: boolean
     message: string
+}
+
+type ActionLogPayload = {
+    maxDurationMinutes?: unknown
+    teamBreakMinutes?: unknown
+}
+
+type TimerLogPayload = {
+    timerMinutes?: unknown
+    startedAt?: unknown
+    timerKind?: unknown
+    launchedStatus?: unknown
 }
 
 const INITIAL_INLINE_ACTION_STATE: InlineActionState = {
@@ -142,6 +156,7 @@ type Props = {
             actionType: string
             message: string
             actorName: string | null
+            payload?: unknown
             createdAt: string
         }>
         _count: { registrations: number }
@@ -218,6 +233,32 @@ function formatMatchGroupLabel(phaseType: string | undefined, bracketPos: string
     if (phaseType !== 'GROUP') return null
     const groupIndex = readGroupIndexFromBracketPos(bracketPos)
     return groupIndex ? `Poule ${groupIndex}` : 'Poule'
+}
+
+function readPlanningDefaultsFromLogs(logs: Array<{ actionType: string; payload?: unknown }>) {
+    const MIN_MATCH_MINUTES = 5
+    const MAX_MATCH_MINUTES = 600
+    const MIN_BREAK_MINUTES = 0
+    const MAX_BREAK_MINUTES = 240
+
+    for (const log of logs) {
+        const payload = (log.payload && typeof log.payload === 'object' ? log.payload : null) as ActionLogPayload | null
+        if (!payload) continue
+
+        const rawMatch = typeof payload.maxDurationMinutes === 'number' ? payload.maxDurationMinutes : null
+        const rawBreak = typeof payload.teamBreakMinutes === 'number' ? payload.teamBreakMinutes : null
+        if (rawMatch === null || rawBreak === null) continue
+
+        return {
+            matchMinutes: Math.min(MAX_MATCH_MINUTES, Math.max(MIN_MATCH_MINUTES, Math.round(rawMatch))),
+            breakMinutes: Math.min(MAX_BREAK_MINUTES, Math.max(MIN_BREAK_MINUTES, Math.round(rawBreak))),
+        }
+    }
+
+    return {
+        matchMinutes: 30,
+        breakMinutes: 10,
+    }
 }
 
 function isTournamentStatus(value: string): value is TournamentStatus {
@@ -360,11 +401,16 @@ function PhaseTypeBadge({ type }: { type: string }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function TournamentTabShell({ orgSlug, tournament, availableTeams, matches }: Props) {
+    const planningDefaults = readPlanningDefaultsFromLogs(tournament.actionLogs)
+    const [nowMs, setNowMs] = useState(() => Date.now())
+    const [isAdminPanelCollapsed, setIsAdminPanelCollapsed] = useState(false)
     const [activeTab, setActiveTab] = useState<TabId>('overview')
     const [phasesStep, setPhasesStep] = useState<1 | 2 | 3>(1)
     const [matchesStep, setMatchesStep] = useState<1 | 2 | 3 | 4>(1)
     const [matchCreateMode, setMatchCreateMode] = useState<'single' | 'bulk'>('single')
     const [selectedMatchIds, setSelectedMatchIds] = useState<string[]>([])
+    const [slotTimerMinutes, setSlotTimerMinutes] = useState(planningDefaults.matchMinutes)
+    const [slotBreakMinutes, setSlotBreakMinutes] = useState(planningDefaults.breakMinutes)
     const [bulkPitchCreateState, bulkPitchCreateAction] = useActionState(
         async (_: InlineActionState, formData: FormData) => bulkCreateTournamentPitches(formData),
         INITIAL_INLINE_ACTION_STATE
@@ -381,6 +427,19 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
         async (_: InlineActionState, formData: FormData) => duplicateTournamentForOrganization(formData),
         INITIAL_INLINE_ACTION_STATE
     )
+    const [slotLaunchState, slotLaunchAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => startTournamentMatchesByScheduleSlot(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+    const [breakTimerState, breakTimerAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => startTournamentBreakTimer(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+
+    useEffect(() => {
+        const interval = window.setInterval(() => setNowMs(Date.now()), 1000)
+        return () => window.clearInterval(interval)
+    }, [])
 
     const bracketPhases = tournament.phases.filter((p) =>
         ['BRACKET_SINGLE', 'BRACKET_DOUBLE', 'PLACEMENT_BRACKET', 'CUSTOM'].includes(p.type)
@@ -697,6 +756,56 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
     const btnPrimary = 'rounded-lg bg-teal-700 px-3 py-2 text-sm font-semibold text-white hover:bg-teal-600 disabled:opacity-50 transition-colors'
     const btnGhost = 'rounded-lg border border-teal-600/40 px-3 py-2 text-sm text-teal-700 hover:bg-teal-600/10 transition-colors'
     const btnDanger = 'rounded-lg border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-500/10 transition-colors'
+
+    const latestTimerEvent = useMemo(() => {
+        return tournament.actionLogs.find((log) => {
+            const payload = (log.payload && typeof log.payload === 'object') ? (log.payload as TimerLogPayload) : null
+            if (!payload || typeof payload.timerMinutes !== 'number') return false
+            if (log.actionType === 'TIMER_CONTROL' && payload.timerKind === 'BREAK') return true
+            if (log.actionType === 'MATCH_BULK_UPDATE' && payload.launchedStatus === 'LIVE') return true
+            return false
+        })
+    }, [tournament.actionLogs])
+
+    const adminTimer = useMemo(() => {
+        if (!latestTimerEvent) return null
+        const payload = (latestTimerEvent.payload && typeof latestTimerEvent.payload === 'object')
+            ? (latestTimerEvent.payload as TimerLogPayload)
+            : null
+        if (!payload || typeof payload.timerMinutes !== 'number') return null
+        const startedAtMs = typeof payload.startedAt === 'string' ? new Date(payload.startedAt).getTime() : NaN
+        const createdAtMs = new Date(latestTimerEvent.createdAt).getTime()
+        const startMs = Number.isFinite(startedAtMs) ? startedAtMs : createdAtMs
+        const durationSeconds = Math.max(0, Math.min(7200, Math.round(payload.timerMinutes * 60)))
+        const remainingSeconds = Math.max(0, Math.ceil((startMs + durationSeconds * 1000 - nowMs) / 1000))
+        const minutes = Math.floor(remainingSeconds / 60)
+        const seconds = remainingSeconds % 60
+        return {
+            mode: payload.timerKind === 'BREAK' ? 'BREAK' : 'MATCH',
+            label: `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`,
+            isDone: remainingSeconds === 0,
+        }
+    }, [latestTimerEvent, nowMs])
+
+    const liveWithoutScores = useMemo(
+        () => matches.filter((match) => match.status === 'LIVE' && !match.result),
+        [matches]
+    )
+    const finishedWithoutScores = useMemo(
+        () => matches.filter((match) => match.status === 'FINISHED' && !match.result),
+        [matches]
+    )
+    const overdueScheduled = useMemo(
+        () => matches.filter((match) =>
+            match.status === 'SCHEDULED' &&
+            match.scheduledAt !== null &&
+            new Date(match.scheduledAt).getTime() <= nowMs &&
+            Boolean(match.homeTeamId) &&
+            Boolean(match.awayTeamId)
+        ),
+        [matches, nowMs]
+    )
+    const requiredActionsCount = liveWithoutScores.length + finishedWithoutScores.length + overdueScheduled.length
 
     // ── Header ────────────────────────────────────────────────────────────────
     return (
@@ -1784,6 +1893,64 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
                             <p className="font-semibold text-slate-800">Planning par horaire</p>
                             <p className="mt-1">Tous les matchs regroupes par horaire exact, puis tries par piste pour chaque horaire.</p>
+                            <div className="mt-3 grid gap-2 rounded-lg border border-slate-200 bg-white p-2 md:grid-cols-[auto_120px] md:items-center">
+                                <p className="text-[11px] uppercase tracking-wider text-slate-500">Timer overlay poules (minutes)</p>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={600}
+                                    value={slotTimerMinutes}
+                                    onChange={(event) => {
+                                        const next = Number.parseInt(event.target.value, 10)
+                                        if (!Number.isFinite(next)) return
+                                        setSlotTimerMinutes(Math.min(600, Math.max(1, next)))
+                                    }}
+                                    className={`${inputCls} w-full`}
+                                />
+                            </div>
+                            <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-white p-2 md:grid-cols-[auto_120px_auto] md:items-center">
+                                <p className="text-[11px] uppercase tracking-wider text-slate-500">Temps de battement (minutes)</p>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={240}
+                                    value={slotBreakMinutes}
+                                    onChange={(event) => {
+                                        const next = Number.parseInt(event.target.value, 10)
+                                        if (!Number.isFinite(next)) return
+                                        setSlotBreakMinutes(Math.min(240, Math.max(1, next)))
+                                    }}
+                                    className={`${inputCls} w-full`}
+                                />
+                                <form action={breakTimerAction} className="md:justify-self-end">
+                                    <input type="hidden" name="tournamentId" value={tournament.id} />
+                                    <input type="hidden" name="orgSlug" value={orgSlug} />
+                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                    <input type="hidden" name="breakMinutes" value={String(slotBreakMinutes)} />
+                                    <LoadingSubmitButton
+                                        className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
+                                        loadingLabel="Bascule..."
+                                    >
+                                        Terminer timer vers battement
+                                    </LoadingSubmitButton>
+                                </form>
+                            </div>
+                            {slotLaunchState.message && (
+                                <p className={`mt-2 rounded-md border px-2 py-1 text-[11px] ${slotLaunchState.success
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-red-200 bg-red-50 text-red-700'
+                                    }`}>
+                                    {slotLaunchState.message}
+                                </p>
+                            )}
+                            {breakTimerState.message && (
+                                <p className={`mt-2 rounded-md border px-2 py-1 text-[11px] ${breakTimerState.success
+                                    ? 'border-amber-200 bg-amber-50 text-amber-700'
+                                    : 'border-red-200 bg-red-50 text-red-700'
+                                    }`}>
+                                    {breakTimerState.message}
+                                </p>
+                            )}
                         </div>
 
                         {matches.length === 0 ? (
@@ -1795,11 +1962,42 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                         Aucun match planifie avec une date/heure.
                                     </p>
                                 ) : (
-                                    scheduleByTime.slots.map((slot) => (
+                                    scheduleByTime.slots.map((slot) => {
+                                        const startableMatches = slot.matches.filter((match) => match.status === 'SCHEDULED')
+                                        const slotIso = new Date(slot.at).toISOString()
+                                        const overlayParams = new URLSearchParams({
+                                            timer: String(slotTimerMinutes * 60),
+                                            startedAt: new Date().toISOString(),
+                                        })
+
+                                        return (
                                         <div key={`planning-time-${slot.at}`} className="rounded-xl border border-slate-200 bg-white p-3">
                                             <div className="mb-2 flex items-center justify-between">
                                                 <p className="text-sm font-bold text-amber-700">{slot.label}</p>
-                                                <span className="text-[11px] text-slate-500">{slot.matches.length} match(s)</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-[11px] text-slate-500">{slot.matches.length} match(s)</span>
+                                                    <form action={slotLaunchAction}>
+                                                        <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                        <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                        <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                        <input type="hidden" name="slotAt" value={slotIso} />
+                                                        <input type="hidden" name="timerMinutes" value={String(slotTimerMinutes)} />
+                                                        <LoadingSubmitButton
+                                                            disabled={startableMatches.length === 0}
+                                                            className="rounded-md border border-emerald-300 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                                                            loadingLabel="Lancement..."
+                                                        >
+                                                            Lancer ({startableMatches.length})
+                                                        </LoadingSubmitButton>
+                                                    </form>
+                                                    <Link
+                                                        href={`/public/${orgSlug}/${tournament.slug}/overlay/pools?${overlayParams.toString()}`}
+                                                        target="_blank"
+                                                        className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
+                                                    >
+                                                        Overlay timer
+                                                    </Link>
+                                                </div>
                                             </div>
                                             <div className="space-y-1.5">
                                                 {slot.matches.map((match) => (
@@ -1820,7 +2018,8 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                 ))}
                                             </div>
                                         </div>
-                                    ))
+                                        )
+                                    })
                                 )}
 
                                 {scheduleByTime.unscheduled.length > 0 && (
@@ -2186,6 +2385,76 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                 )}
 
             </div>
+
+            <aside className={`fixed bottom-4 right-4 z-40 rounded-xl border border-slate-200 bg-white/95 p-3 shadow-xl backdrop-blur transition-all ${isAdminPanelCollapsed ? 'w-[240px]' : 'w-[320px]'}`}>
+                <div className="mb-2 flex items-center justify-between">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Pilotage live</p>
+                    <button
+                        type="button"
+                        onClick={() => setIsAdminPanelCollapsed((prev) => !prev)}
+                        className="rounded-md border border-slate-300 px-2 py-0.5 text-[11px] text-slate-700 hover:bg-slate-50"
+                    >
+                        {isAdminPanelCollapsed ? 'Ouvrir' : 'Reduire'}
+                    </button>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                    <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Timer admin</p>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                        <p className={`text-2xl font-black tabular-nums ${adminTimer?.isDone ? 'text-rose-600' : 'text-amber-700'}`}>
+                            {adminTimer ? adminTimer.label : '--:--'}
+                        </p>
+                        <span className={`rounded-md px-2 py-0.5 text-[10px] font-semibold ${requiredActionsCount > 0 ? 'bg-rose-100 text-rose-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                            {requiredActionsCount} action(s)
+                        </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                        {adminTimer
+                            ? (adminTimer.mode === 'BREAK' ? 'Temps de battement actif' : 'Timer de match actif')
+                            : 'Aucun timer actif'}
+                    </p>
+                </div>
+
+                {!isAdminPanelCollapsed && (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-white p-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Actions requises</p>
+                        <div className="mt-2 space-y-1.5 text-xs">
+                            {liveWithoutScores.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setActiveTab('matches'); setMatchesStep(4) }}
+                                    className="w-full rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-left text-amber-700 hover:bg-amber-100"
+                                >
+                                    Ajouter les scores: {liveWithoutScores.length} match(s) live
+                                </button>
+                            )}
+                            {finishedWithoutScores.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => { setActiveTab('matches'); setMatchesStep(4) }}
+                                    className="w-full rounded-md border border-rose-200 bg-rose-50 px-2 py-1.5 text-left text-rose-700 hover:bg-rose-100"
+                                >
+                                    Finaliser les scores: {finishedWithoutScores.length} match(s) termines
+                                </button>
+                            )}
+                            {overdueScheduled.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveTab('planning-time')}
+                                    className="w-full rounded-md border border-sky-200 bg-sky-50 px-2 py-1.5 text-left text-sky-700 hover:bg-sky-100"
+                                >
+                                    Lancer les matchs en retard: {overdueScheduled.length}
+                                </button>
+                            )}
+                            {liveWithoutScores.length === 0 && finishedWithoutScores.length === 0 && overdueScheduled.length === 0 && (
+                                <p className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-emerald-700">
+                                    Aucune action urgente.
+                                </p>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </aside>
         </div>
     )
 }

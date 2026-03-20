@@ -6,3 +6,8 @@ export const TeamSchema = z.object({
     logoUrl: z.string().url().optional().nullable(),
     organizationId: z.string().uuid(),
 });
+
+export const TeamUpdateSchema = TeamSchema.extend({
+    teamId: z.string().uuid(),
+    orgSlug: z.string().min(1),
+});

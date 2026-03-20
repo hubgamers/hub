@@ -32,6 +32,7 @@ export type PublicTournamentPhase = {
 export type StandingRow = {
     teamId: string
     teamName: string
+    teamLogoUrl: string | null
     played: number
     wins: number
     draws: number
@@ -139,9 +140,18 @@ export const getPublicTournamentBySlugs = cache(async (orgSlug: string, tourname
                     teamId: true,
                     seed: true,
                     isConfirmed: true,
-                    team: { select: { id: true, name: true, slug: true } },
+                    team: { select: { id: true, name: true, slug: true, logoUrl: true } },
                 },
                 orderBy: [{ seed: 'asc' }, { registeredAt: 'asc' }],
+            },
+            actionLogs: {
+                select: {
+                    actionType: true,
+                    payload: true,
+                    createdAt: true,
+                },
+                orderBy: { createdAt: 'desc' },
+                take: 30,
             },
         },
     })
@@ -169,7 +179,7 @@ export const getPublicTournamentBySlugs = cache(async (orgSlug: string, tourname
 })
 
 export function computeTournamentStandings(
-    registrations: Array<{ teamId: string; team: { id: string; name: string } }>,
+    registrations: Array<{ teamId: string; team: { id: string; name: string; logoUrl?: string | null } }> ,
     matches: PublicMatch[]
 ): StandingRow[] {
     const rows = new Map<string, StandingRow>(
@@ -178,6 +188,7 @@ export function computeTournamentStandings(
             {
                 teamId: registration.team.id,
                 teamName: registration.team.name,
+                teamLogoUrl: registration.team.logoUrl ?? null,
                 played: 0,
                 wins: 0,
                 draws: 0,
@@ -253,11 +264,16 @@ export function formatMatchTimeLabel(date: Date | null) {
 }
 
 export function computeGroupOverviews(
-    registrations: Array<{ teamId: string; team: { id: string; name: string } }>,
+    registrations: Array<{ teamId: string; team: { id: string; name: string; logoUrl?: string | null } }> ,
     phases: PublicTournamentPhase[],
     matches: PublicMatch[]
 ): PublicGroupOverview[] {
-    const teamNameById = new Map(registrations.map((registration) => [registration.teamId, registration.team.name]))
+    const teamById = new Map(
+        registrations.map((registration) => [
+            registration.teamId,
+            { name: registration.team.name, logoUrl: registration.team.logoUrl ?? null },
+        ])
+    )
 
     return phases
         .filter((phase) => phase.type === 'GROUP')
@@ -276,7 +292,8 @@ export function computeGroupOverviews(
                         teamId,
                         {
                             teamId,
-                            teamName: teamNameById.get(teamId) ?? 'Equipe',
+                            teamName: teamById.get(teamId)?.name ?? 'Equipe',
+                            teamLogoUrl: teamById.get(teamId)?.logoUrl ?? null,
                             played: 0,
                             wins: 0,
                             draws: 0,
