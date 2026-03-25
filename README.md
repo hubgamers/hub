@@ -1,4 +1,4 @@
-## Configuration
+## Configuration 
 
 ### Créer un .env
 
