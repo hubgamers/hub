@@ -436,18 +436,20 @@ function sanitizeTournamentSlug(raw: string) {
 }
 
 function resetPhaseRuntimeConfig(config: unknown): Prisma.InputJsonValue {
-  const base: Prisma.InputJsonObject =
+  const base: Record<string, unknown> =
     config && typeof config === 'object'
-      ? ({ ...(config as Record<string, unknown>) } as Prisma.InputJsonObject)
+      ? { ...(config as Record<string, unknown>) }
       : {}
 
   const groups = base.groups && typeof base.groups === 'object'
-    ? ({ ...(base.groups as Record<string, unknown>) } as Prisma.InputJsonObject)
+    ? (base.groups as Record<string, unknown>)
     : null
 
   if (groups) {
-    groups.placements = []
-    base.groups = groups
+    base.groups = {
+      ...groups,
+      placements: [],
+    }
   }
 
   return base as Prisma.InputJsonValue
@@ -1366,7 +1368,7 @@ function buildBracketSkeleton(params: {
   }
 
   if (phaseType === 'PLACEMENT_BRACKET' && normalizedSize >= 4) {
-    const parsedRanges = parsePlacementRootRanges({ value: placementRanges, normalizedSize, rounds })
+    const parsedRanges = parsePlacementRootRanges({ value: placementRanges ?? undefined, normalizedSize, rounds })
     if ('error' in parsedRanges) return { error: parsedRanges.error }
 
     const pitchCursorRef = { value: 0 }

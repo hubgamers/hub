@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import {
   ArrowRight,
   Chrome,
@@ -47,7 +47,11 @@ const OAUTH_PROVIDERS: Array<{
   },
 ];
 
-export default function SaaSAuth() {
+function AuthPageFallback() {
+  return <div className="min-h-screen bg-slate-50" />;
+}
+
+function SaaSAuthContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const supabase = createClient();
@@ -544,5 +548,13 @@ export default function SaaSAuth() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function SaaSAuth() {
+  return (
+    <Suspense fallback={<AuthPageFallback />}>
+      <SaaSAuthContent />
+    </Suspense>
   );
 }

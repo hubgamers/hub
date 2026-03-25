@@ -108,6 +108,7 @@ export default async function ExternalPlacementBracketEditPage({
         include: {
             homeTeam: { select: { id: true, name: true } },
             awayTeam: { select: { id: true, name: true } },
+            pitch: { select: { name: true } },
             result: true,
         },
         orderBy: [{ phaseId: 'asc' }, { roundNumber: 'asc' }, { createdAt: 'asc' }],
@@ -130,6 +131,8 @@ export default async function ExternalPlacementBracketEditPage({
                     phaseId: match.phaseId,
                     roundNumber: match.roundNumber,
                     bracketPos: match.bracketPos,
+                    scheduledAt: match.scheduledAt ? match.scheduledAt.toISOString() : null,
+                    pitchName: match.pitch?.name ?? null,
                     status: match.status,
                     homeTeamId: match.homeTeamId,
                     homeTeamName: match.homeTeam?.name || 'TBD',

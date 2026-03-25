@@ -44,6 +44,7 @@ export default async function TournamentBracketPage({
         include: {
             homeTeam: { select: { id: true, name: true } },
             awayTeam: { select: { id: true, name: true } },
+            pitch: { select: { name: true } },
             result: true,
         },
         orderBy: [{ roundNumber: 'asc' }, { createdAt: 'asc' }],
@@ -89,6 +90,8 @@ export default async function TournamentBracketPage({
                                     id: match.id,
                                     roundNumber: match.roundNumber,
                                     bracketPos: match.bracketPos,
+                                    scheduledAt: match.scheduledAt ? match.scheduledAt.toISOString() : null,
+                                    pitchName: match.pitch?.name ?? null,
                                     status: match.status,
                                     homeTeamName: match.homeTeam?.name || 'TBD',
                                     awayTeamName: match.awayTeam?.name || 'TBD',
