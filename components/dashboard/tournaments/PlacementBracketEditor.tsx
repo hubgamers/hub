@@ -65,6 +65,8 @@ type AppProps = {
   timerSeconds?: number;
   timerStartMs?: number | null;
   timerMode?: 'MATCH' | 'BREAK';
+  backgroundImageUrl?: string | null;
+  backgroundDim?: number;
 };
 
 const WINNER_COLORS = ['text-sky-400', 'text-yellow-500', 'text-orange-500', 'text-[#ccff00]'];
@@ -254,7 +256,7 @@ const BracketCard = ({ title, rounds, className = '', matchWidth = 'w-[80px]' }:
 
 // --- Main App ---
 
-export default function App({ phases = [], matches = [], timerSeconds = 0, timerStartMs = null, timerMode = 'MATCH' }: AppProps) {
+export default function App({ phases = [], matches = [], timerSeconds = 0, timerStartMs = null, timerMode = 'MATCH', backgroundImageUrl = null, backgroundDim = 0.55 }: AppProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const router = useRouter();
 
@@ -317,9 +319,17 @@ export default function App({ phases = [], matches = [], timerSeconds = 0, timer
 
   const compactPlacementTrees = sizedPlacementTrees.filter((tree) => tree.isCompact);
   const mainPlacementTrees = sizedPlacementTrees.filter((tree) => !tree.isCompact);
+  const rootStyle: React.CSSProperties | undefined = backgroundImageUrl
+    ? {
+      backgroundImage: `linear-gradient(rgba(3, 7, 18, ${backgroundDim}), rgba(3, 7, 18, ${backgroundDim})), url(${backgroundImageUrl})`,
+      backgroundSize: 'cover',
+      backgroundPosition: 'center',
+      backgroundRepeat: 'no-repeat',
+    }
+    : undefined;
 
   return (
-    <div className="h-screen w-screen bg-[#030712] text-slate-200 font-sans p-4 flex flex-col overflow-hidden relative">
+    <div className="h-screen w-screen bg-[#030712] text-slate-200 font-sans p-4 flex flex-col overflow-hidden relative" style={rootStyle}>
       {/* Background FX */}
       <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_-20%,_#1e293b_0%,_transparent_70%)] pointer-events-none opacity-50" />
       

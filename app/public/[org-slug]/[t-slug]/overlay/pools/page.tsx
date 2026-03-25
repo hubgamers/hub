@@ -6,8 +6,13 @@ import {
     getPublicTournamentBySlugs,
 } from '@/lib/actions/tournament/public.queries'
 import PoolsOverlayCarousel from './PoolsOverlayCarousel'
+import {
+    buildOverlayBackgroundStyle,
+    readOverlayBackgroundConfig,
+    type OverlayBackgroundSearchParams,
+} from '../_lib/background'
 
-type OverlaySearchParams = {
+type OverlaySearchParams = OverlayBackgroundSearchParams & {
     rotate?: string | string[]
     refresh?: string | string[]
     timer?: string | string[]
@@ -139,6 +144,8 @@ export default async function TournamentPoolsOverlayPage({
     if (!payload) notFound()
 
     const { tournament, matches } = payload
+    const background = readOverlayBackgroundConfig(query, tournament.bannerUrl)
+    const backgroundStyle = buildOverlayBackgroundStyle(background.backgroundUrl, background.dim)
     const latestTimerEvent = tournament.actionLogs.find((log) => {
         const launch = readLaunchSlotPayload(log.payload)
         if (!launch || typeof launch.timerMinutes !== 'number') return false
@@ -222,7 +229,7 @@ export default async function TournamentPoolsOverlayPage({
     return (
         <>
             {groupOverviews.length === 0 ? (
-                <main className="min-h-screen bg-transparent text-slate-900">
+                <main className="min-h-screen bg-transparent text-slate-900" style={backgroundStyle}>
                     <div className="mx-auto flex min-h-screen w-full max-w-[1920px] flex-col gap-4 px-4 py-4">
                         <section className="rounded-3xl border border-slate-200 bg-white/95 p-5 shadow-sm backdrop-blur">
                             <p className="text-xs uppercase tracking-[0.24em] text-teal-700">Overlay poules</p>
@@ -256,6 +263,8 @@ export default async function TournamentPoolsOverlayPage({
                     timerSeconds={timerSeconds}
                     timerStartMs={timerStartMs}
                     timerMode={timerKind}
+                    backgroundImageUrl={background.backgroundUrl}
+                    backgroundDim={background.dim}
                 />
             )}
         </>

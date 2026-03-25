@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { Users2, ArrowRight } from "lucide-react";
 import { createAdminTeam, deleteAdminTeam, updateAdminTeam } from "@/lib/actions/admin/crud.actions";
+import TeamBulkImporter from "@/components/dashboard/teams/TeamBulkImporter";
 
 export default async function AdminTeamsPage() {
   const organizations = await prisma.organization.findMany({
@@ -34,6 +35,9 @@ export default async function AdminTeamsPage() {
     },
   });
 
+  // Get the first organization for bulk import (or allow selection)
+  const defaultOrgId = organizations[0]?.id;
+
   return (
     <div className="space-y-6 text-slate-900">
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
@@ -41,8 +45,10 @@ export default async function AdminTeamsPage() {
         <h1 className="mt-2 text-2xl md:text-3xl font-black">Gestion des équipes</h1>
       </div>
 
+      {defaultOrgId && <TeamBulkImporter organizationId={defaultOrgId} />}
+
       <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-        <h2 className="text-sm font-semibold mb-3">Créer une équipe</h2>
+        <h2 className="text-sm font-semibold mb-3">Créer une équipe individuellement</h2>
         <form action={createAdminTeam} className="grid gap-2 md:grid-cols-5">
           <input name="name" required placeholder="Nom" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
           <input name="slug" required placeholder="slug" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />

@@ -53,6 +53,8 @@ type Props = {
     timerSeconds?: number
     timerStartMs?: number | null
     timerMode?: 'MATCH' | 'BREAK'
+    backgroundImageUrl?: string | null
+    backgroundDim?: number
 }
 
 const CARDS_PER_SLIDE = 4
@@ -91,7 +93,7 @@ function initialsFromTeamName(name: string) {
         .join('')
 }
 
-export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refreshMs = 10000, timerSeconds = 0, timerStartMs = null, timerMode = 'MATCH' }: Props) {
+export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refreshMs = 10000, timerSeconds = 0, timerStartMs = null, timerMode = 'MATCH', backgroundImageUrl = null, backgroundDim = 0.55 }: Props) {
     const [activeSlide, setActiveSlide] = useState(0)
     const [refreshCycle, setRefreshCycle] = useState(0)
     const [lastSyncAt, setLastSyncAt] = useState(() => Date.now())
@@ -151,9 +153,18 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
 
     const currentSlide = slides[activeSlide] || slides[0]
     const lastSyncLabel = useMemo(() => new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(lastSyncAt), [lastSyncAt])
+    const rootStyle = useMemo(() => {
+        if (!backgroundImageUrl) return undefined
+        return {
+            backgroundImage: `linear-gradient(rgba(2, 6, 23, ${backgroundDim}), rgba(2, 6, 23, ${backgroundDim})), url(${backgroundImageUrl})`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            backgroundRepeat: 'no-repeat',
+        }
+    }, [backgroundDim, backgroundImageUrl])
 
     return (
-        <div className="relative aspect-video w-full overflow-hidden bg-slate-950 p-6 font-sans text-white uppercase italic select-none">
+        <div className="relative aspect-video w-full overflow-hidden bg-slate-950 p-6 font-sans text-white uppercase italic select-none" style={rootStyle}>
 
             {/* HEADER AREA */}
             <header className="mb-4 flex items-end justify-between border-b border-white/10 pb-4">

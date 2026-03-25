@@ -20,6 +20,7 @@ type Props = {
         name: string
         type: string
         order: number
+        config?: unknown
     }
     matches: BracketMatch[]
     timer?: {

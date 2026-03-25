@@ -8,12 +8,36 @@ import {
 
 export const dynamic = 'force-dynamic'
 
+type PublicPageSearchParams = {
+    bg?: string | string[]
+    bgDim?: string | string[]
+}
+
+function firstParam(value: string | string[] | undefined) {
+    if (Array.isArray(value)) return value[0]
+    return value
+}
+
+function buildOverlayHref(basePath: string, bg: string | undefined, bgDim: string | undefined) {
+    const [pathPart, queryPart] = basePath.split('?')
+    const params = new URLSearchParams(queryPart ?? '')
+    if (bg) params.set('bg', bg)
+    if (bgDim) params.set('bgDim', bgDim)
+    const query = params.toString()
+    return query ? `${pathPart}?${query}` : pathPart
+}
+
 export default async function PublicTournamentPage({
     params,
+    searchParams,
 }: {
     params: Promise<{ 'org-slug': string; 't-slug': string }>
+    searchParams: Promise<PublicPageSearchParams>
 }) {
     const { 'org-slug': orgSlug, 't-slug': tournamentSlug } = await params
+    const query = await searchParams
+    const bg = firstParam(query.bg)
+    const bgDim = firstParam(query.bgDim)
 
     const payload = await getPublicTournamentBySlugs(orgSlug, tournamentSlug)
     if (!payload) notFound()
@@ -27,6 +51,12 @@ export default async function PublicTournamentPage({
         .sort((a, b) => (a.scheduledAt?.getTime() ?? Number.MAX_SAFE_INTEGER) - (b.scheduledAt?.getTime() ?? Number.MAX_SAFE_INTEGER))
         .slice(0, 8)
 
+    const placementPhases = tournament.phases
+        .filter((phase) => phase.type === 'PLACEMENT_BRACKET')
+        .sort((a, b) => a.order - b.order)
+    const bracketAPhase = placementPhases[0] ?? null
+    const bracketBPhase = placementPhases[1] ?? null
+
     return (
         <main className="min-h-screen bg-white text-slate-900">
             <div className="mx-auto w-full max-w-7xl space-y-6 px-4 py-8 md:px-8">
@@ -39,26 +69,44 @@ export default async function PublicTournamentPage({
 
                     <div className="mt-4 flex flex-wrap gap-2">
                         <Link
-                            href={`/public/${orgSlug}/${tournamentSlug}/overlay`}
-                            className="rounded-lg border border-teal-300 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 hover:bg-teal-100"
-                        >
-                            Overlay general
-                        </Link>
-                        <Link
-                            href={`/public/${orgSlug}/${tournamentSlug}/overlay/pools`}
+                            href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay/pools`, bg, bgDim)}
                             className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-700 hover:bg-amber-100"
                         >
                             Overlay poules
                         </Link>
-                        {tournament.pitches.map((pitch) => (
+
+                        {bracketAPhase ? (
                             <Link
-                                key={pitch.id}
-                                href={`/public/${orgSlug}/${tournamentSlug}/overlay/pitch/${pitch.id}`}
-                                className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold hover:border-slate-500"
+                                href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay/placement?phaseId=${bracketAPhase.id}`, bg, bgDim)}
+                                className="rounded-lg border border-fuchsia-300 bg-fuchsia-50 px-3 py-2 text-xs font-semibold text-fuchsia-700 hover:bg-fuchsia-100"
                             >
-                                Overlay {pitch.name}
+                                Overlay {bracketAPhase.name}
                             </Link>
-                        ))}
+                        ) : (
+                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                                Overlay bracket A indisponible
+                            </span>
+                        )}
+
+                        {bracketBPhase ? (
+                            <Link
+                                href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay/placement?phaseId=${bracketBPhase.id}`, bg, bgDim)}
+                                className="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100"
+                            >
+                                Overlay {bracketBPhase.name}
+                            </Link>
+                        ) : (
+                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                                Overlay bracket B indisponible
+                            </span>
+                        )}
+
+                        <Link
+                            href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay`, bg, bgDim)}
+                            className="rounded-lg border border-teal-300 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 hover:bg-teal-100"
+                        >
+                            Overlay classement general
+                        </Link>
                     </div>
                 </section>
 
@@ -120,7 +168,7 @@ export default async function PublicTournamentPage({
                                     liveMatches.map((match) => (
                                         <Link
                                             key={match.id}
-                                            href={`/public/${orgSlug}/${tournamentSlug}/overlay/match/${match.id}`}
+                                            href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay/match/${match.id}`, bg, bgDim)}
                                             className="block rounded-lg border border-emerald-200 bg-emerald-50 p-3 hover:bg-emerald-100"
                                         >
                                             <p className="text-xs uppercase text-emerald-700">{match.pitch.name} · {match.phase.name}</p>

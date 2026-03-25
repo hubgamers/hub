@@ -23,6 +23,7 @@ type Props = {
         name: string
         type: string
         order: number
+        config?: unknown
     }
     matches: BracketMatch[]
     timer?: {
@@ -61,7 +62,138 @@ type PlacementTreeWithSize = PlacementTree & {
     isCompact: boolean
 }
 
+type RankingEntry = {
+    place: number
+    teamName: string | null
+}
+
+type RankingSegment = {
+    start: number
+    end: number
+    label: string
+}
+
 const WINNER_COLORS = ['text-sky-400', 'text-yellow-500', 'text-orange-500', 'text-[#ccff00]']
+
+function readPlacementLabels(config: unknown): Record<string, string> {
+    if (!config || typeof config !== 'object') return {}
+    const raw = (config as { placementLabels?: unknown }).placementLabels
+    if (!raw || typeof raw !== 'object') return {}
+
+    return Object.fromEntries(
+        Object.entries(raw as Record<string, unknown>)
+            .filter(([key, value]) => /^\d+-\d+$/.test(key) && typeof value === 'string' && value.trim().length > 0)
+            .map(([key, value]) => [key, (value as string).trim()])
+    )
+}
+
+function readPlacementRankingSegments(config: unknown): RankingSegment[] {
+    if (!config || typeof config !== 'object') return []
+    const raw = (config as { placementRankingSegments?: unknown }).placementRankingSegments
+    if (!Array.isArray(raw)) return []
+
+    return raw
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null
+            const entry = item as Record<string, unknown>
+            const start = typeof entry.start === 'number' ? entry.start : Number.NaN
+            const end = typeof entry.end === 'number' ? entry.end : Number.NaN
+            const label = typeof entry.label === 'string' ? entry.label.trim() : ''
+            if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return null
+            return { start, end, label: label || `${start}-${end}` }
+        })
+        .filter((item): item is RankingSegment => Boolean(item))
+        .sort((a, b) => a.start - b.start || a.end - b.end)
+}
+
+function resolveMatchWinnerLoser(match: BracketMatch): { winner: string | null; loser: string | null } {
+    if (match.homeScore === null || match.awayScore === null) return { winner: null, loser: null }
+    if (match.homeScore === match.awayScore) return { winner: null, loser: null }
+    if (match.homeScore > match.awayScore) return { winner: match.homeTeamName || null, loser: match.awayTeamName || null }
+    return { winner: match.awayTeamName || null, loser: match.homeTeamName || null }
+}
+
+function buildPlacementRanking(matches: BracketMatch[]): Map<number, string | null> {
+    const ranking = new Map<number, string | null>()
+
+    const wbParsed = matches
+        .map((match) => {
+            const parsed = parseWinnerMatch(match)
+            return parsed ? { ...parsed, match } : null
+        })
+        .filter((item): item is { round: number; matchNo: number; match: BracketMatch } => Boolean(item))
+
+    const wbFinalRound = wbParsed.reduce((max, item) => Math.max(max, item.round), 0)
+    const wbFinal = wbParsed.find((item) => item.round === wbFinalRound && item.matchNo === 1)?.match
+    if (wbFinal) {
+        const { winner, loser } = resolveMatchWinnerLoser(wbFinal)
+        ranking.set(1, winner)
+        ranking.set(2, loser)
+    }
+
+    const placementParsed = matches
+        .map((match) => {
+            const parsed = parsePlacementMatch(match)
+            return parsed ? { ...parsed, match } : null
+        })
+        .filter((item): item is { start: number; end: number; round: number; matchNo: number; match: BracketMatch } => Boolean(item))
+
+    const ranges = Array.from(new Set(placementParsed.map((item) => `${item.start}-${item.end}`))).map((key) => {
+        const [start, end] = key.split('-').map(Number)
+        return { start, end }
+    })
+
+    const children = new Set<string>()
+    for (const range of ranges) {
+        for (const maybeParent of ranges) {
+            if (range.start === maybeParent.start && range.end === maybeParent.end) continue
+            if (range.start >= maybeParent.start && range.end <= maybeParent.end) {
+                children.add(`${range.start}-${range.end}`)
+                break
+            }
+        }
+    }
+
+    const rootRanges = ranges
+        .filter((range) => !children.has(`${range.start}-${range.end}`))
+        .sort((a, b) => a.start - b.start)
+
+    const resolveRangeRanking = (start: number, end: number): RankingEntry[] => {
+        const size = end - start + 1
+        const entries = placementParsed.filter((item) => item.start === start && item.end === end)
+        if (entries.length === 0 || size < 2) return []
+
+        const finalRound = entries.reduce((max, item) => Math.max(max, item.round), 0)
+        const finalMatch = entries.find((item) => item.round === finalRound && item.matchNo === 1)?.match
+
+        const output: RankingEntry[] = []
+        if (finalMatch) {
+            const { winner, loser } = resolveMatchWinnerLoser(finalMatch)
+            output.push({ place: start, teamName: winner })
+            output.push({ place: start + 1, teamName: loser })
+        }
+
+        for (let round = finalRound - 1; round >= 1; round -= 1) {
+            const childStart = start + size / 2 ** round
+            const childEnd = start + size / 2 ** (round - 1) - 1
+            if (!Number.isInteger(childStart) || !Number.isInteger(childEnd) || childEnd < childStart) continue
+            output.push(...resolveRangeRanking(childStart, childEnd))
+        }
+
+        return output
+    }
+
+    for (const range of rootRanges) {
+        const entries = resolveRangeRanking(range.start, range.end)
+        for (const entry of entries) {
+            if (!ranking.has(entry.place)) {
+                ranking.set(entry.place, entry.teamName)
+            }
+        }
+    }
+
+    return ranking
+}
 
 function formatRemainingTime(totalSeconds: number): string {
     const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0')
@@ -118,7 +250,7 @@ function buildWinnerData(matches: BracketMatch[]): BracketRoundData[] {
     }))
 }
 
-function buildPlacementTrees(matches: BracketMatch[]): PlacementTree[] {
+function buildPlacementTrees(matches: BracketMatch[], placementLabels: Record<string, string>): PlacementTree[] {
     const ranges = new Set<string>()
 
     matches.forEach((m) => {
@@ -142,8 +274,9 @@ function buildPlacementTrees(matches: BracketMatch[]): PlacementTree[] {
             })
 
             const sortedRounds = Array.from(roundsMap.entries()).sort((a, b) => a[0] - b[0])
+            const key = `${start}-${end}`
             return {
-                title: start === end ? `PLACE ${start}` : `PLACES ${start}-${end}`,
+                title: placementLabels[key] || (start === end ? `PLACE ${start}` : `PLACE ${start} A ${end}`),
                 start,
                 end,
                 rounds: sortedRounds.map(([, items], idx) => ({
@@ -334,7 +467,10 @@ export default function PlacementBracketPhaseView({ orgSlug, tournamentSlug, pha
     }, [remainingTimerSeconds])
 
     const winnerData = buildWinnerData(matches)
-    const placementTrees = buildPlacementTrees(matches)
+    const placementLabels = useMemo(() => readPlacementLabels(phase.config), [phase.config])
+    const rankingSegments = useMemo(() => readPlacementRankingSegments(phase.config), [phase.config])
+    const rankingByPlace = useMemo(() => buildPlacementRanking(matches), [matches])
+    const placementTrees = buildPlacementTrees(matches, placementLabels)
     const sizedPlacementTrees: PlacementTreeWithSize[] = placementTrees
         .map((tree) => {
             const totalMatches = countTreeMatches(tree)
@@ -348,6 +484,11 @@ export default function PlacementBracketPhaseView({ orgSlug, tournamentSlug, pha
 
     const compactPlacementTrees = sizedPlacementTrees.filter((tree) => tree.isCompact)
     const mainPlacementTrees = sizedPlacementTrees.filter((tree) => !tree.isCompact)
+    const rankingPlaces = Array.from(rankingByPlace.keys()).sort((a, b) => a - b)
+    const defaultSegments = rankingPlaces.length > 0
+        ? [{ start: rankingPlaces[0], end: rankingPlaces[rankingPlaces.length - 1], label: 'Classement global' }]
+        : []
+    const segmentsToDisplay = rankingSegments.length > 0 ? rankingSegments : defaultSegments
 
     return (
         <div className="space-y-5 rounded-[30px] border border-slate-200 bg-[linear-gradient(180deg,_#f8fafc_0%,_#eef2f7_100%)] p-4 md:p-5">
@@ -467,6 +608,36 @@ export default function PlacementBracketPhaseView({ orgSlug, tournamentSlug, pha
                             <h2 className="text-2xl font-black italic text-white leading-none uppercase tracking-tighter">{phase.name}</h2>
                         </div>
                     </footer>
+                </div>
+            )}
+
+            {segmentsToDisplay.length > 0 && (
+                <div className="rounded-[18px] border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="mb-3 flex items-center justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">Classement lie des brackets</p>
+                        <span className="text-[11px] text-slate-500">Genere a partir des resultats enregistres</span>
+                    </div>
+
+                    <div className="grid gap-3 lg:grid-cols-2">
+                        {segmentsToDisplay.map((segment) => (
+                            <div key={`ranking-segment-${segment.start}-${segment.end}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <p className="text-xs font-semibold text-slate-700">{segment.label}</p>
+                                <p className="mb-2 text-[11px] text-slate-500">Places {segment.start} a {segment.end}</p>
+                                <div className="space-y-1">
+                                    {Array.from({ length: segment.end - segment.start + 1 }, (_, index) => {
+                                        const place = segment.start + index
+                                        const teamName = rankingByPlace.get(place)
+                                        return (
+                                            <div key={`ranking-place-${segment.start}-${segment.end}-${place}`} className="flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1">
+                                                <span className="text-[11px] font-semibold text-slate-600">#{place}</span>
+                                                <span className="text-[11px] text-slate-800">{teamName || '-'}</span>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
                 </div>
             )}
         </div>

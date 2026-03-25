@@ -81,6 +81,7 @@ export default async function TournamentBracketPage({
                                 name: phase.name,
                                 type: phase.type,
                                 order: phase.order,
+                                config: phase.config,
                             }}
                             matches={matches
                                 .filter((match) => match.phaseId === phase.id)

@@ -3,15 +3,23 @@ import {
     computeTournamentStandings,
     getPublicTournamentBySlugs,
 } from '@/lib/actions/tournament/public.queries'
+import {
+    buildOverlayBackgroundStyle,
+    readOverlayBackgroundConfig,
+    type OverlayBackgroundSearchParams,
+} from './_lib/background'
 
 export const dynamic = 'force-dynamic'
 
 export default async function TournamentOverlayPage({
     params,
+    searchParams,
 }: {
     params: Promise<{ 'org-slug': string; 't-slug': string }>
+    searchParams: Promise<OverlayBackgroundSearchParams>
 }) {
     const { 'org-slug': orgSlug, 't-slug': tournamentSlug } = await params
+    const query = await searchParams
 
     const payload = await getPublicTournamentBySlugs(orgSlug, tournamentSlug)
     if (!payload) notFound()
@@ -19,9 +27,11 @@ export default async function TournamentOverlayPage({
     const { tournament, matches } = payload
     const standings = computeTournamentStandings(tournament.registrations, matches).slice(0, 8)
     const liveMatches = matches.filter((match) => match.status === 'LIVE').slice(0, 4)
+    const background = readOverlayBackgroundConfig(query, tournament.bannerUrl)
+    const backgroundStyle = buildOverlayBackgroundStyle(background.backgroundUrl, background.dim)
 
     return (
-        <main className="min-h-screen bg-transparent text-slate-900">
+        <main className="min-h-screen bg-transparent text-slate-900" style={backgroundStyle}>
             <div className="mx-auto grid min-h-screen w-full max-w-7xl gap-6 px-6 py-6 lg:grid-cols-2">
                 <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
                     <p className="text-xs uppercase tracking-[0.2em] text-teal-700">Overlay tournoi</p>

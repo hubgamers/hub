@@ -46,6 +46,13 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
     const [state, formAction, isPending] = useActionState(bulkUpdateTournamentMatches, initialState);
     const [sortBy, setSortBy] = useState<"default" | "status">("default");
     const [statusFilter, setStatusFilter] = useState<"ALL" | MatchStatus>("ALL");
+    const [phaseFilter, setPhaseFilter] = useState<string>("ALL");
+
+    // Extract unique phases from matches
+    const uniquePhases = useMemo(() => {
+        const phasesSet = new Set(matches.map((m) => m.phaseName));
+        return Array.from(phasesSet).sort();
+    }, [matches]);
 
     const [rows, setRows] = useState(
         matches.map((match) => ({
@@ -94,9 +101,18 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
         const indexedMatches = matches
             .map((match, index) => ({ match, index }))
             .filter(({ match }) => {
-                if (statusFilter === "ALL") return true;
-                const currentStatus = rowMap.get(match.id)?.status ?? match.status;
-                return currentStatus === statusFilter;
+                // Apply status filter
+                if (statusFilter !== "ALL") {
+                    const currentStatus = rowMap.get(match.id)?.status ?? match.status;
+                    if (currentStatus !== statusFilter) return false;
+                }
+                
+                // Apply phase filter
+                if (phaseFilter !== "ALL" && match.phaseName !== phaseFilter) {
+                    return false;
+                }
+                
+                return true;
             });
 
         if (sortBy === "default") {
@@ -113,7 +129,7 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
                 return a.index - b.index;
             })
             .map(({ match }) => match);
-    }, [matches, rowMap, sortBy, statusFilter]);
+    }, [matches, rowMap, sortBy, statusFilter, phaseFilter]);
 
     const updateRow = (matchId: string, patch: Partial<(typeof rows)[number]>) => {
         setRows((prev) => prev.map((row) => (row.matchId === matchId ? { ...row, ...patch } : row)));
@@ -127,6 +143,21 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
                     <p className="text-xs text-slate-500">Modifie plusieurs statuts/scores puis sauvegarde en une fois.</p>
                 </div>
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <label className="flex items-center gap-2 text-xs text-slate-500">
+                        <span>Phase</span>
+                        <select
+                            value={phaseFilter}
+                            onChange={(event) => setPhaseFilter(event.target.value)}
+                            className="rounded-md border border-slate-300 bg-white px-2 py-2 text-xs text-slate-700"
+                        >
+                            <option value="ALL">Toutes</option>
+                            {uniquePhases.map((phase) => (
+                                <option key={phase} value={phase}>
+                                    {phase}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
                     <label className="flex items-center gap-2 text-xs text-slate-500">
                         <span>Statut</span>
                         <select

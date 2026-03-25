@@ -125,6 +125,7 @@ export const getPublicTournamentBySlugs = cache(async (orgSlug: string, tourname
             name: true,
             slug: true,
             description: true,
+            bannerUrl: true,
             status: true,
             startDate: true,
             endDate: true,

@@ -99,6 +99,7 @@ export default async function DashboardOrgTournamentDetails({
                     name: tournament.name,
                     slug: tournament.slug,
                     description: tournament.description,
+                    bannerUrl: tournament.bannerUrl,
                     status: tournament.status,
                     isPublic: tournament.isPublic,
                     maxTeams: tournament.maxTeams,

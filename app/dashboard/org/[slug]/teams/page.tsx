@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getOrganizationBySlug } from "@/lib/actions/organization/organization.queries";
 import { Users2, Plus, PencilLine } from "lucide-react";
 import Image from "next/image";
+import TeamBulkImporter from "@/components/dashboard/teams/TeamBulkImporter";
 
 export default async function DashboardOrgTeams({
     params,
@@ -26,6 +27,8 @@ export default async function DashboardOrgTeams({
                     <Plus size={16} /> Creer une equipe
                 </Link>
             </div>
+
+            <TeamBulkImporter organizationId={org.id} />
 
             {org.teams.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-slate-500">

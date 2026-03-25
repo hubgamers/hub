@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useEffect, useActionState, type ReactNode } from 'react'
+import { useState, useMemo, useEffect, useActionState, type ChangeEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useFormStatus } from 'react-dom'
 import {
@@ -8,6 +8,8 @@ import {
     autoPlaceGroupTeams,
     closeTournamentPhase,
     configureGroupPhase,
+    configurePlacementBracketLabels,
+    configurePlacementBracketRankingSegments,
     createTournamentMatch,
     createTournamentPitch,
     bulkCreateTournamentPitches,
@@ -22,8 +24,10 @@ import {
     generatePhaseRoundRobinMatches,
     removeTournamentRegistration,
     resetTournamentForReconfiguration,
+    retryTournamentPropagation,
     startTournamentBreakTimer,
     startTournamentMatchesByScheduleSlot,
+    updateTournamentOverlayBackground,
     updateTournamentRegistrationConfirmation,
 } from '@/lib/actions/tournament-management.actions'
 import GroupPlacementBoard from './GroupPlacementBoard'
@@ -33,6 +37,7 @@ import BracketPhaseView from './BracketPhaseView'
 import BracketSeedEditor from './BracketSeedEditor'
 import PhaseFlowEditor from './PhaseFlowEditor'
 import { TournamentStatus } from '@prisma/client'
+import { createClient } from '@/lib/supabase/client'
 
 // Next.js server actions can return arbitrary values, but the React HTML form
 // `action` prop typing requires `void | Promise<void>`. This wrapper silences
@@ -75,6 +80,19 @@ type RouteConfig = {
 
 type GroupPlacement = { teamId: string; groupIndex: number; slot: number }
 type GroupConfig = { count: number; teamsPerGroup: number; placements: GroupPlacement[] }
+
+type GroupStandingRow = {
+    teamId: string
+    teamName: string
+    played: number
+    wins: number
+    draws: number
+    losses: number
+    goalsFor: number
+    goalsAgainst: number
+    goalDiff: number
+    points: number
+}
 
 type InlineActionState = {
     success?: boolean
@@ -145,6 +163,7 @@ type Props = {
         name: string
         slug: string
         description: string | null
+        bannerUrl: string | null
         status: string
         isPublic: boolean
         maxTeams: number | null
@@ -207,6 +226,175 @@ function readGroupConfig(config: unknown): GroupConfig {
         )
         : []
     return { count, teamsPerGroup, placements }
+}
+
+function readPlacementLabels(config: unknown): Record<string, string> {
+    if (!config || typeof config !== 'object') return {}
+    const raw = (config as { placementLabels?: unknown }).placementLabels
+    if (!raw || typeof raw !== 'object') return {}
+
+    return Object.fromEntries(
+        Object.entries(raw as Record<string, unknown>)
+            .filter(([key, value]) => /^\d+-\d+$/.test(key) && typeof value === 'string' && value.trim().length > 0)
+            .map(([key, value]) => [key, (value as string).trim()])
+    )
+}
+
+function readPlacementRangesFromMatches(matches: Array<{ bracketPos: string | null }>) {
+    const ranges = new Set<string>()
+    for (const match of matches) {
+        const parsed = match.bracketPos?.match(/^P(\d+)-(\d+)-R\d+-M\d+$/)
+        if (!parsed) continue
+        ranges.add(`${Number(parsed[1])}-${Number(parsed[2])}`)
+    }
+
+    return Array.from(ranges)
+        .map((rangeKey) => {
+            const [start, end] = rangeKey.split('-').map(Number)
+            return { key: rangeKey, start, end, size: end - start + 1 }
+        })
+        .sort((a, b) => b.size - a.size || a.start - b.start)
+}
+
+function defaultPlacementLabel(start: number, end: number) {
+    return start === end ? `Place ${start}` : `Place ${start} a ${end}`
+}
+
+function readPlacementRankingSegments(config: unknown): Array<{ start: number; end: number; label: string }> {
+    if (!config || typeof config !== 'object') return []
+    const raw = (config as { placementRankingSegments?: unknown }).placementRankingSegments
+    if (!Array.isArray(raw)) return []
+
+    return raw
+        .map((item) => {
+            if (!item || typeof item !== 'object') return null
+            const entry = item as Record<string, unknown>
+            const start = typeof entry.start === 'number' ? entry.start : Number.NaN
+            const end = typeof entry.end === 'number' ? entry.end : Number.NaN
+            const label = typeof entry.label === 'string' ? entry.label.trim() : ''
+            if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) return null
+            return { start, end, label: label || `${start}-${end}` }
+        })
+        .filter((item): item is { start: number; end: number; label: string } => Boolean(item))
+        .sort((a, b) => a.start - b.start || a.end - b.end)
+}
+
+type PlacementRankingMatch = {
+    bracketPos: string | null
+    roundNumber: number | null
+    status: 'SCHEDULED' | 'LIVE' | 'FINISHED' | 'CANCELLED'
+    homeTeamId: string | null
+    awayTeamId: string | null
+    homeTeamName: string
+    awayTeamName: string
+    homeScore: number | null
+    awayScore: number | null
+}
+
+type PlacementRankingRow = {
+    rank: number
+    teamName: string
+    teamId: string | null
+    source: string
+}
+
+function parseWbBracketPos(bracketPos: string | null) {
+    if (!bracketPos) return null
+    const parsed = bracketPos.match(/^WB-R(\d+)-M(\d+)$/)
+    if (!parsed) return null
+    const round = Number(parsed[1])
+    const matchNo = Number(parsed[2])
+    if (!Number.isInteger(round) || !Number.isInteger(matchNo) || round < 1 || matchNo < 1) return null
+    return { round, matchNo }
+}
+
+function parsePlacementBracketPos(bracketPos: string | null) {
+    if (!bracketPos) return null
+    const parsed = bracketPos.match(/^P(\d+)-(\d+)-R(\d+)-M(\d+)$/)
+    if (!parsed) return null
+    const start = Number(parsed[1])
+    const end = Number(parsed[2])
+    const round = Number(parsed[3])
+    const matchNo = Number(parsed[4])
+    if (!Number.isInteger(start) || !Number.isInteger(end) || !Number.isInteger(round) || !Number.isInteger(matchNo)) return null
+    return { start, end, round, matchNo, size: end - start + 1 }
+}
+
+function winnerAndLoser(match: PlacementRankingMatch) {
+    if (match.status !== 'FINISHED' || match.homeScore === null || match.awayScore === null) return null
+    if (!match.homeTeamId || !match.awayTeamId) return null
+
+    if (match.homeScore >= match.awayScore) {
+        return {
+            winner: { id: match.homeTeamId, name: match.homeTeamName || 'Equipe' },
+            loser: { id: match.awayTeamId, name: match.awayTeamName || 'Equipe' },
+        }
+    }
+
+    return {
+        winner: { id: match.awayTeamId, name: match.awayTeamName || 'Equipe' },
+        loser: { id: match.homeTeamId, name: match.homeTeamName || 'Equipe' },
+    }
+}
+
+function computePlacementPhaseRanking(matches: PlacementRankingMatch[]): PlacementRankingRow[] {
+    const byRank = new Map<number, PlacementRankingRow>()
+
+    const wbMatches = matches
+        .map((match) => ({ match, parsed: parseWbBracketPos(match.bracketPos) }))
+        .filter((item): item is { match: PlacementRankingMatch; parsed: { round: number; matchNo: number } } => Boolean(item.parsed))
+
+    const maxWbRound = wbMatches.reduce((max, item) => Math.max(max, item.parsed.round), 0)
+    if (maxWbRound > 0) {
+        const finalWb = wbMatches.find((item) => item.parsed.round === maxWbRound && item.parsed.matchNo === 1)
+        if (finalWb) {
+            const result = winnerAndLoser(finalWb.match)
+            if (result) {
+                byRank.set(1, { rank: 1, teamName: result.winner.name, teamId: result.winner.id, source: 'Finale WB' })
+                byRank.set(2, { rank: 2, teamName: result.loser.name, teamId: result.loser.id, source: 'Finale WB' })
+            }
+        }
+    }
+
+    const placementMatches = matches
+        .map((match) => ({ match, parsed: parsePlacementBracketPos(match.bracketPos) }))
+        .filter((item): item is { match: PlacementRankingMatch; parsed: { start: number; end: number; round: number; matchNo: number; size: number } } => Boolean(item.parsed))
+
+    const groupedByRange = new Map<string, Array<{ match: PlacementRankingMatch; parsed: { start: number; end: number; round: number; matchNo: number; size: number } }>>()
+    for (const item of placementMatches) {
+        const key = `${item.parsed.start}-${item.parsed.end}`
+        if (!groupedByRange.has(key)) groupedByRange.set(key, [])
+        groupedByRange.get(key)!.push(item)
+    }
+
+    for (const rangeItems of groupedByRange.values()) {
+        const sample = rangeItems[0]
+        if (sample.parsed.size !== 2) continue
+
+        const finalRound = rangeItems.reduce((max, item) => Math.max(max, item.parsed.round), 0)
+        const finalMatch = rangeItems
+            .filter((item) => item.parsed.round === finalRound)
+            .sort((a, b) => a.parsed.matchNo - b.parsed.matchNo)[0]
+
+        if (!finalMatch) continue
+        const result = winnerAndLoser(finalMatch.match)
+        if (!result) continue
+
+        byRank.set(sample.parsed.start, {
+            rank: sample.parsed.start,
+            teamName: result.winner.name,
+            teamId: result.winner.id,
+            source: `Match de place ${sample.parsed.start}-${sample.parsed.end}`,
+        })
+        byRank.set(sample.parsed.end, {
+            rank: sample.parsed.end,
+            teamName: result.loser.name,
+            teamId: result.loser.id,
+            source: `Match de place ${sample.parsed.start}-${sample.parsed.end}`,
+        })
+    }
+
+    return Array.from(byRank.values()).sort((a, b) => a.rank - b.rank)
 }
 
 function formatPhaseType(type: string) {
@@ -296,19 +484,14 @@ function computeGroupStandings(
     phaseId: string,
     matches: SerializedMatch[],
     teamNameById: Map<string, string>
-) {
+): GroupStandingRow[] {
     const teamIds = groupConfig.placements
         .filter((p) => p.groupIndex === groupIndex)
         .sort((a, b) => a.slot - b.slot)
         .map((p) => p.teamId)
     const uniqueTeamIds = [...new Set(teamIds)]
 
-    type Row = {
-        teamId: string; teamName: string; played: number; wins: number
-        draws: number; losses: number; goalsFor: number; goalsAgainst: number
-        goalDiff: number; points: number
-    }
-    const rows = new Map<string, Row>(
+    const rows = new Map<string, GroupStandingRow>(
         uniqueTeamIds.map((id) => [id, {
             teamId: id, teamName: teamNameById.get(id) ?? 'Equipe',
             played: 0, wins: 0, draws: 0, losses: 0,
@@ -339,6 +522,81 @@ function computeGroupStandings(
         if (b.points !== a.points) return b.points - a.points
         if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff
         if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor
+        return a.teamName.localeCompare(b.teamName)
+    })
+}
+
+function computeGlobalGroupPhaseStandings(
+    groupConfig: GroupConfig,
+    phaseId: string,
+    matches: SerializedMatch[],
+    teamNameById: Map<string, string>
+) {
+    const rowsByTeam = new Map<string, GroupStandingRow & { groupIndex: number | null }>()
+
+    const placements = [...groupConfig.placements]
+        .sort((a, b) => a.groupIndex - b.groupIndex || a.slot - b.slot)
+
+    for (const placement of placements) {
+        if (rowsByTeam.has(placement.teamId)) continue
+        rowsByTeam.set(placement.teamId, {
+            teamId: placement.teamId,
+            teamName: teamNameById.get(placement.teamId) ?? 'Equipe',
+            groupIndex: placement.groupIndex,
+            played: 0,
+            wins: 0,
+            draws: 0,
+            losses: 0,
+            goalsFor: 0,
+            goalsAgainst: 0,
+            goalDiff: 0,
+            points: 0,
+        })
+    }
+
+    for (const match of matches) {
+        if (match.phaseId !== phaseId || !match.result || !match.homeTeamId || !match.awayTeamId) continue
+        const home = rowsByTeam.get(match.homeTeamId)
+        const away = rowsByTeam.get(match.awayTeamId)
+        if (!home || !away) continue
+
+        const hs = match.result.homeScore
+        const as_ = match.result.awayScore
+
+        home.played += 1
+        away.played += 1
+
+        home.goalsFor += hs
+        home.goalsAgainst += as_
+        away.goalsFor += as_
+        away.goalsAgainst += hs
+
+        if (hs > as_) {
+            home.wins += 1
+            away.losses += 1
+            home.points += 3
+        } else if (hs < as_) {
+            away.wins += 1
+            home.losses += 1
+            away.points += 3
+        } else {
+            home.draws += 1
+            away.draws += 1
+            home.points += 1
+            away.points += 1
+        }
+
+        home.goalDiff = home.goalsFor - home.goalsAgainst
+        away.goalDiff = away.goalsFor - away.goalsAgainst
+    }
+
+    return Array.from(rowsByTeam.values()).sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points
+        if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff
+        if (b.goalsFor !== a.goalsFor) return b.goalsFor - a.goalsFor
+        const aGroup = a.groupIndex ?? 999
+        const bGroup = b.groupIndex ?? 999
+        if (aGroup !== bGroup) return aGroup - bGroup
         return a.teamName.localeCompare(b.teamName)
     })
 }
@@ -410,8 +668,13 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
     const [matchesStep, setMatchesStep] = useState<1 | 2 | 3 | 4>(1)
     const [matchCreateMode, setMatchCreateMode] = useState<'single' | 'bulk'>('single')
     const [selectedMatchIds, setSelectedMatchIds] = useState<string[]>([])
+    const [standingsOverlay, setStandingsOverlay] = useState<{ phaseId: string; mode: 'groups' | 'global' } | null>(null)
     const [slotTimerMinutes, setSlotTimerMinutes] = useState(planningDefaults.matchMinutes)
     const [slotBreakMinutes, setSlotBreakMinutes] = useState(planningDefaults.breakMinutes)
+    const [overlayBgUrl, setOverlayBgUrl] = useState(tournament.bannerUrl ?? '')
+    const [overlayBgPreview, setOverlayBgPreview] = useState(tournament.bannerUrl ?? '')
+    const [overlayBgUploading, setOverlayBgUploading] = useState(false)
+    const [overlayBgUploadError, setOverlayBgUploadError] = useState('')
     const [bulkPitchCreateState, bulkPitchCreateAction] = useActionState(
         async (_: InlineActionState, formData: FormData) => bulkCreateTournamentPitches(formData),
         INITIAL_INLINE_ACTION_STATE
@@ -436,6 +699,65 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
         async (_: InlineActionState, formData: FormData) => startTournamentBreakTimer(formData),
         INITIAL_INLINE_ACTION_STATE
     )
+    const [placementLabelsState, placementLabelsAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => configurePlacementBracketLabels(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+    const [placementSegmentsState, placementSegmentsAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => configurePlacementBracketRankingSegments(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+    const [customBracketGenerationState, customBracketGenerationAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => generateCustomPlacementBracketMatches(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+    const [overlayBackgroundState, overlayBackgroundAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => updateTournamentOverlayBackground(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+    const [retryPropagationState, retryPropagationAction] = useActionState(
+        async (_: InlineActionState, formData: FormData) => retryTournamentPropagation(formData),
+        INITIAL_INLINE_ACTION_STATE
+    )
+
+    const onOverlayBackgroundChange = async (event: ChangeEvent<HTMLInputElement>) => {
+        const file = event.target.files?.[0]
+        if (!file) return
+
+        const allowedTypes = ['image/png', 'image/jpeg', 'image/webp', 'image/svg+xml', 'image/gif']
+        if (!allowedTypes.includes(file.type)) {
+            setOverlayBgUploadError('Format non supporte. Utilisez PNG, JPEG, WEBP, SVG ou GIF.')
+            return
+        }
+        if (file.size > 8 * 1024 * 1024) {
+            setOverlayBgUploadError('Le fichier doit faire moins de 8 Mo.')
+            return
+        }
+
+        setOverlayBgUploadError('')
+        setOverlayBgUploading(true)
+        setOverlayBgPreview(URL.createObjectURL(file))
+
+        const supabase = createClient()
+        const ext = file.name.split('.').pop() ?? 'png'
+        const path = `tournaments/${tournament.id}/overlay-bg-${Date.now()}.${ext}`
+        const { error } = await supabase.storage.from('logos').upload(path, file, { upsert: true })
+
+        if (error) {
+            if (error.message.toLowerCase().includes('row-level security')) {
+                setOverlayBgUploadError('Upload bloque par la policy Supabase Storage (RLS). Verifiez le bucket logos.')
+            } else {
+                setOverlayBgUploadError('Erreur lors de l upload : ' + error.message)
+            }
+            setOverlayBgUploading(false)
+            return
+        }
+
+        const { data } = supabase.storage.from('logos').getPublicUrl(path)
+        setOverlayBgUrl(data.publicUrl)
+        setOverlayBgPreview(data.publicUrl)
+        setOverlayBgUploading(false)
+    }
 
     useEffect(() => {
         const interval = window.setInterval(() => setNowMs(Date.now()), 1000)
@@ -504,10 +826,27 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
     const seededTeamsByPhase = useMemo(() => {
         const map = new Map<string, string[]>()
         for (const phase of tournament.phases) {
-            const ids = matches
-                .filter((m) => m.phaseId === phase.id)
-                .flatMap((m) => [m.homeTeamId, m.awayTeamId])
-                .filter((id): id is string => Boolean(id))
+            let ids: string[] = []
+
+            if (phase.type === 'GROUP') {
+                ids = readGroupConfig(phase.config).placements.map((placement) => placement.teamId)
+            } else if (
+                phase.type === 'BRACKET_SINGLE' ||
+                phase.type === 'BRACKET_DOUBLE' ||
+                phase.type === 'PLACEMENT_BRACKET' ||
+                phase.type === 'CUSTOM'
+            ) {
+                ids = matches
+                    .filter((m) => m.phaseId === phase.id && m.roundNumber === 1)
+                    .flatMap((m) => [m.homeTeamId, m.awayTeamId])
+                    .filter((id): id is string => Boolean(id))
+            } else {
+                ids = matches
+                    .filter((m) => m.phaseId === phase.id)
+                    .flatMap((m) => [m.homeTeamId, m.awayTeamId])
+                    .filter((id): id is string => Boolean(id))
+            }
+
             map.set(phase.id, [...new Set(ids)])
         }
         return map
@@ -595,6 +934,25 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
         return map
     }, [matches, teamNameById, tournament.phases])
 
+    const pendingQualifierPhases = useMemo(() => {
+        const items: Array<{ phaseId: string; phaseName: string; pending: number }> = []
+
+        for (const phase of tournament.phases) {
+            const incoming = incomingQualifiersByPhase.get(phase.id) ?? []
+            const seededCount = (seededTeamsByPhase.get(phase.id) ?? []).length
+            const pending = Math.max(0, incoming.length - seededCount)
+            if (pending > 0) {
+                items.push({
+                    phaseId: phase.id,
+                    phaseName: phase.name,
+                    pending,
+                })
+            }
+        }
+
+        return items
+    }, [incomingQualifiersByPhase, seededTeamsByPhase, tournament.phases])
+
     const scheduleByPitch = useMemo(() => {
         const byPitch = new Map<string, Map<number, SerializedMatch[]>>()
         const unscheduledByPitch = new Map<string, SerializedMatch[]>()
@@ -660,6 +1018,45 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
             }
         })
     }, [matches, tournament.pitches])
+
+    const standingsOverlayPhase = useMemo(
+        () => standingsOverlay
+            ? tournament.phases.find((phase) => phase.id === standingsOverlay.phaseId) ?? null
+            : null,
+        [standingsOverlay, tournament.phases]
+    )
+
+    const standingsOverlayGroupConfig = useMemo(
+        () => (standingsOverlayPhase?.type === 'GROUP' ? readGroupConfig(standingsOverlayPhase.config) : null),
+        [standingsOverlayPhase]
+    )
+
+    const standingsOverlayByGroup = useMemo(() => {
+        if (!standingsOverlayPhase || !standingsOverlayGroupConfig) return []
+        return Array.from({ length: standingsOverlayGroupConfig.count }, (_, idx) => {
+            const groupIndex = idx + 1
+            return {
+                groupIndex,
+                standings: computeGroupStandings(
+                    groupIndex,
+                    standingsOverlayGroupConfig,
+                    standingsOverlayPhase.id,
+                    matches,
+                    teamNameById
+                ),
+            }
+        })
+    }, [matches, standingsOverlayGroupConfig, standingsOverlayPhase, teamNameById])
+
+    const standingsOverlayGlobal = useMemo(() => {
+        if (!standingsOverlayPhase || !standingsOverlayGroupConfig) return []
+        return computeGlobalGroupPhaseStandings(
+            standingsOverlayGroupConfig,
+            standingsOverlayPhase.id,
+            matches,
+            teamNameById
+        )
+    }, [matches, standingsOverlayGroupConfig, standingsOverlayPhase, teamNameById])
 
     const scheduleByTime = useMemo(() => {
         const byTime = new Map<number, SerializedMatch[]>()
@@ -966,6 +1363,123 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                             </div>
                         </div>
 
+                        <div className="rounded-xl border border-slate-200 bg-white p-4">
+                            <div className="mb-3">
+                                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Maintenance propagation</h2>
+                                <p className="mt-1 text-xs text-slate-500">
+                                    Utilisez ce bouton si des qualifiees restent en attente apres une reinitialisation ou un incident de propagation.
+                                </p>
+                            </div>
+
+                            <form action={retryPropagationAction} className="space-y-3">
+                                <input type="hidden" name="tournamentId" value={tournament.id} />
+                                <input type="hidden" name="orgSlug" value={orgSlug} />
+                                <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                <input type="hidden" name="force" value="on" />
+
+                                <LoadingSubmitButton
+                                    className={`${btnPrimary} w-full md:w-auto disabled:opacity-60`}
+                                    loadingLabel="Relance forcee..."
+                                >
+                                    Forcer la propagation des equipes
+                                </LoadingSubmitButton>
+
+                                {retryPropagationState.message && (
+                                    <p className={`text-xs ${retryPropagationState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {retryPropagationState.message}
+                                    </p>
+                                )}
+                            </form>
+
+                            {pendingQualifierPhases.length > 0 ? (
+                                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                                    <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-700">
+                                        Equipes en attente de qualification: {pendingQualifierPhases.reduce((sum, item) => sum + item.pending, 0)}
+                                    </p>
+                                    <div className="mt-2 flex flex-wrap gap-1">
+                                        {pendingQualifierPhases.map((item) => (
+                                            <span key={item.phaseId} className="rounded-md bg-white px-2 py-0.5 text-[11px] text-amber-800 border border-amber-300">
+                                                {item.phaseName}: {item.pending}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="mt-3 text-xs text-emerald-700">Aucune equipe en attente de qualification detectee.</p>
+                            )}
+                        </div>
+
+                        <div className="rounded-xl border border-slate-200 bg-white p-4">
+                            <div className="mb-3">
+                                <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Overlay public</h2>
+                                <p className="mt-1 text-xs text-slate-500">Importez une image de fond qui sera reprise automatiquement dans les overlays publics.</p>
+                            </div>
+
+                            <form action={overlayBackgroundAction} className="space-y-3">
+                                <input type="hidden" name="tournamentId" value={tournament.id} />
+                                <input type="hidden" name="orgSlug" value={orgSlug} />
+                                <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                <input type="hidden" name="bannerUrl" value={overlayBgUrl} />
+
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-slate-500">Image de fond overlay</label>
+                                    <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 bg-white p-4 text-xs text-slate-500 transition hover:border-teal-500 hover:bg-teal-50/30">
+                                        {overlayBgPreview ? (
+                                            <img src={overlayBgPreview} alt="Apercu fond overlay" className="h-24 w-full rounded object-cover" />
+                                        ) : (
+                                            <span>Aucune image selectionnee</span>
+                                        )}
+                                        <span>{overlayBgUploading ? 'Upload en cours...' : 'Cliquer pour importer une image'}</span>
+                                        <span className="text-[11px] text-slate-400">PNG, JPEG, WEBP, SVG, GIF - max 8 Mo</span>
+                                        <input
+                                            type="file"
+                                            accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                                            onChange={onOverlayBackgroundChange}
+                                            disabled={overlayBgUploading}
+                                            className="hidden"
+                                        />
+                                    </label>
+                                    {overlayBgUploadError && <p className="mt-2 text-xs text-red-700">{overlayBgUploadError}</p>}
+                                </div>
+
+                                <div className="grid gap-2 md:grid-cols-[1fr_auto_auto]">
+                                    <input
+                                        value={overlayBgUrl}
+                                        onChange={(event) => {
+                                            setOverlayBgUrl(event.target.value)
+                                            setOverlayBgPreview(event.target.value)
+                                        }}
+                                        className={inputCls}
+                                        placeholder="https://..."
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setOverlayBgUrl('')
+                                            setOverlayBgPreview('')
+                                            setOverlayBgUploadError('')
+                                        }}
+                                        className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                    >
+                                        Retirer
+                                    </button>
+                                    <LoadingSubmitButton
+                                        className={`${btnPrimary} w-full disabled:opacity-60`}
+                                        disabled={overlayBgUploading}
+                                        loadingLabel="Enregistrement..."
+                                    >
+                                        Sauvegarder
+                                    </LoadingSubmitButton>
+                                </div>
+
+                                {overlayBackgroundState.message && (
+                                    <p className={`text-xs ${overlayBackgroundState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                        {overlayBackgroundState.message}
+                                    </p>
+                                )}
+                            </form>
+                        </div>
+
                         {/* Phase flow */}
                         {tournament.phases.length === 0 ? (
                             <EmptyState message="Aucune phase configuree." />
@@ -1199,9 +1713,10 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                     const pct = stats.total > 0 ? Math.round((stats.finished / stats.total) * 100) : 0
                                     const routes = readRoutes(phase.config)
                                     const parallelGroup = readParallelGroup(phase.config)
+                                    const isGroupPhase = phase.type === 'GROUP'
                                     const seededTeams = seededTeamsByPhase.get(phase.id) ?? []
                                     const incomingQualifiers = incomingQualifiersByPhase.get(phase.id) ?? []
-                                    const waitingQualifiers = incomingQualifiers.filter((teamId) => !seededTeams.includes(teamId))
+                                    const waitingQualifierCount = Math.max(0, incomingQualifiers.length - seededTeams.length)
                                     return (
                                         <div key={phase.id} className={`rounded-xl border p-4 ${phase.isCompleted ? 'border-emerald-500/30 bg-emerald-950/20' : 'border-slate-200 bg-white'}`}>
                                             <div className="mb-3 flex items-start justify-between gap-2">
@@ -1229,6 +1744,25 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                 </div>
                                             </div>
 
+                                            {isGroupPhase && (
+                                                <div className="mb-3 grid gap-2 sm:grid-cols-2">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setStandingsOverlay({ phaseId: phase.id, mode: 'groups' })}
+                                                        className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-left text-[11px] font-medium text-slate-700 hover:bg-slate-50"
+                                                    >
+                                                        Voir classement par poule
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setStandingsOverlay({ phaseId: phase.id, mode: 'global' })}
+                                                        className="rounded-lg border border-teal-300 bg-teal-50 px-2 py-1.5 text-left text-[11px] font-medium text-teal-700 hover:bg-teal-100"
+                                                    >
+                                                        Voir classement global phase
+                                                    </button>
+                                                </div>
+                                            )}
+
                                             {/* Routes */}
                                             {routes.length > 0 && (
                                                 <div className="mb-3 space-y-1 rounded-lg border border-slate-200 bg-slate-50 p-2">
@@ -1242,7 +1776,7 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                 </div>
                                             )}
 
-                                            {(seededTeams.length > 0 || waitingQualifiers.length > 0) && (
+                                            {(seededTeams.length > 0 || waitingQualifierCount > 0) && (
                                                 <div className="mb-3 space-y-2 rounded-lg border border-teal-600/30 bg-teal-50 p-2">
                                                     {seededTeams.length > 0 && (
                                                         <div>
@@ -1256,16 +1790,12 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                             </div>
                                                         </div>
                                                     )}
-                                                    {waitingQualifiers.length > 0 && (
+                                                    {waitingQualifierCount > 0 && (
                                                         <div>
                                                             <p className="text-[10px] uppercase tracking-wider text-amber-700">Qualifiees detectees (a placer)</p>
-                                                            <div className="mt-1 flex flex-wrap gap-1">
-                                                                {waitingQualifiers.map((teamId) => (
-                                                                    <span key={`${phase.id}-incoming-${teamId}`} className="rounded-md bg-amber-100 px-2 py-0.5 text-[11px] text-amber-700">
-                                                                        {teamNameById.get(teamId) ?? teamId}
-                                                                    </span>
-                                                                ))}
-                                                            </div>
+                                                            <p className="mt-1 text-[11px] text-amber-700">
+                                                                {waitingQualifierCount} place(s) d'entree encore vide(s) pour {incomingQualifiers.length} qualifiee(s) detectee(s).
+                                                            </p>
                                                         </div>
                                                     )}
                                                 </div>
@@ -1740,6 +2270,8 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                             homeScore: m.result?.homeScore ?? null,
                                             awayScore: m.result?.awayScore ?? null,
                                         }))
+                                    const incomingQualifierCount = (incomingQualifiersByPhase.get(phase.id) ?? []).length
+                                    const defaultParticipantsCount = Math.max(incomingQualifierCount, 8)
 
                                     return (
                                         <div key={phase.id} className="space-y-3 rounded-2xl border border-slate-300 bg-white p-4">
@@ -1754,26 +2286,51 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                             <BracketPhaseView
                                                 orgSlug={orgSlug}
                                                 tournamentSlug={tournament.slug}
-                                                phase={{ id: phase.id, name: phase.name, type: phase.type, order: phase.order }}
+                                                phase={{ id: phase.id, name: phase.name, type: phase.type, order: phase.order, config: phase.config }}
                                                 matches={phaseMatches}
                                                 timer={bracketTimerContext}
                                             />
 
                                             {(phase.type === 'CUSTOM' || phase.type === 'PLACEMENT_BRACKET') && (
-                                                <StepSection num={1} title="Generer la structure du bracket personnalise" desc="Definissez le nombre de participants. Les perdants peuvent rejouer pour etablir un classement complet.">
-                                                    <form action={va(generateCustomPlacementBracketMatches)} className="grid gap-2 md:grid-cols-6">
+                                                <StepSection num={1} title="Generer la structure du bracket personnalise" desc="Definissez le nombre de participants. Pour un bracket a placement, vous pouvez aussi configurer les plages de classement.">
+                                                    <form action={customBracketGenerationAction} className="grid gap-2 md:grid-cols-8">
                                                         <input type="hidden" name="tournamentId" value={tournament.id} />
                                                         <input type="hidden" name="orgSlug" value={orgSlug} />
                                                         <input type="hidden" name="tournamentSlug" value={tournament.slug} />
                                                         <input type="hidden" name="phaseId" value={phase.id} />
                                                         <div>
                                                             <label className="mb-1 block text-xs text-slate-500">Participants</label>
-                                                            <input name="participantsCount" type="number" min={4} max={64} defaultValue={8} className={`${inputCls} w-full`} />
+                                                            <input
+                                                                name="participantsCount"
+                                                                type="number"
+                                                                min={4}
+                                                                max={64}
+                                                                defaultValue={defaultParticipantsCount}
+                                                                className={`${inputCls} w-full`}
+                                                            />
+                                                            {incomingQualifierCount > 0 && (
+                                                                <p className="mt-1 text-[11px] text-slate-500">
+                                                                    {incomingQualifierCount} equipe(s) qualifiee(s) detectee(s) pour cette phase.
+                                                                </p>
+                                                            )}
                                                         </div>
                                                         <div>
                                                             <label className="mb-1 block text-xs text-slate-500">Heure de debut</label>
                                                             <input name="startAt" type="datetime-local" className={`${inputCls} w-full`} />
                                                         </div>
+                                                        {phase.type === 'PLACEMENT_BRACKET' && (
+                                                            <div className="md:col-span-2">
+                                                                <label className="mb-1 block text-xs text-slate-500">Plages de classement</label>
+                                                                <input
+                                                                    name="placementRanges"
+                                                                    className={`${inputCls} w-full`}
+                                                                    placeholder="Optionnel. Ex: 25-32, 21-24, 19-20"
+                                                                />
+                                                                <p className="mt-1 text-[11px] text-slate-500">
+                                                                    Laissez vide pour generer automatiquement les plages obligatoires (recommande). Format manuel: start-end, separes par virgule.
+                                                                </p>
+                                                            </div>
+                                                        )}
                                                         <label className={`flex cursor-pointer items-center gap-2 self-end ${inputCls}`}>
                                                             <input name="includeLosersReplay" type="checkbox" defaultChecked className="h-4 w-4 accent-teal-600" />
                                                             Perdants rejouent (classement complet)
@@ -1785,7 +2342,173 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                         <div className="md:col-span-2 flex items-end">
                                                             <LoadingSubmitButton className={`${btnGhost} w-full disabled:opacity-60`} loadingLabel="Generation...">Generer le bracket</LoadingSubmitButton>
                                                         </div>
+
+                                                        {customBracketGenerationState.message && (
+                                                            <p className={`md:col-span-8 text-[11px] ${customBracketGenerationState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                                {customBracketGenerationState.message}
+                                                            </p>
+                                                        )}
                                                     </form>
+
+                                                    {phase.type === 'PLACEMENT_BRACKET' && (() => {
+                                                        const ranges = readPlacementRangesFromMatches(phaseMatches)
+                                                        const labels = readPlacementLabels(phase.config)
+                                                        const segments = readPlacementRankingSegments(phase.config)
+                                                        const rankingRows = computePlacementPhaseRanking(phaseMatches)
+                                                        const maxPlacementEnd = phaseMatches.reduce((max, match) => {
+                                                            const parsed = parsePlacementBracketPos(match.bracketPos)
+                                                            return parsed ? Math.max(max, parsed.end) : max
+                                                        }, 0)
+                                                        const rankingSegments = segments.length > 0
+                                                            ? segments
+                                                            : [{ start: 1, end: Math.max(2, maxPlacementEnd || rankingRows.at(-1)?.rank || 2), label: 'Classement global' }]
+                                                        const segmentsText = segments.length > 0
+                                                            ? segments.map((segment) => `${segment.start}-${segment.end}: ${segment.label}`).join('\n')
+                                                            : '1-15: Bracket principal\n16-32: Bracket placement 2'
+
+                                                        if (ranges.length === 0) {
+                                                            return (
+                                                                <p className="mt-2 text-[11px] text-slate-500">
+                                                                    Generez d'abord le bracket de placement pour personnaliser les noms des sous-brackets.
+                                                                </p>
+                                                            )
+                                                        }
+
+                                                        return (
+                                                            <div className="mt-3 space-y-3">
+                                                                <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                                                    <div className="mb-2 flex items-center justify-between">
+                                                                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                                                                            Classement global de la phase
+                                                                        </p>
+                                                                        <span className="text-[11px] text-slate-500">
+                                                                            {rankingRows.length} place(s) resolue(s)
+                                                                        </span>
+                                                                    </div>
+
+                                                                    <div className="space-y-3">
+                                                                        {rankingSegments.map((segment) => {
+                                                                            const rows = rankingRows.filter((row) => row.rank >= segment.start && row.rank <= segment.end)
+                                                                            return (
+                                                                                <div key={`ranking-segment-${phase.id}-${segment.start}-${segment.end}`} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                                                                                    <div className="mb-1 flex items-center justify-between gap-2">
+                                                                                        <p className="text-xs font-semibold text-slate-700">
+                                                                                            {segment.label}
+                                                                                        </p>
+                                                                                        <span className="text-[11px] text-slate-500">
+                                                                                            Places {segment.start}-{segment.end}
+                                                                                        </span>
+                                                                                    </div>
+
+                                                                                    {rows.length === 0 ? (
+                                                                                        <p className="text-[11px] text-slate-500">
+                                                                                            Aucune place finalisee sur ce segment pour le moment.
+                                                                                        </p>
+                                                                                    ) : (
+                                                                                        <div className="overflow-x-auto">
+                                                                                            <table className="min-w-full text-left text-[11px] text-slate-600">
+                                                                                                <thead>
+                                                                                                    <tr className="border-b border-slate-200 text-slate-500">
+                                                                                                        <th className="px-1 py-1 font-semibold">Place</th>
+                                                                                                        <th className="px-1 py-1 font-semibold">Equipe</th>
+                                                                                                        <th className="px-1 py-1 font-semibold">Source</th>
+                                                                                                    </tr>
+                                                                                                </thead>
+                                                                                                <tbody>
+                                                                                                    {rows.map((row) => (
+                                                                                                        <tr key={`ranking-row-${phase.id}-${row.rank}`} className="border-b border-slate-100 last:border-b-0">
+                                                                                                            <td className="px-1 py-1 font-semibold text-slate-700">#{row.rank}</td>
+                                                                                                            <td className="px-1 py-1">{row.teamName}</td>
+                                                                                                            <td className="px-1 py-1 text-slate-500">{row.source}</td>
+                                                                                                        </tr>
+                                                                                                    ))}
+                                                                                                </tbody>
+                                                                                            </table>
+                                                                                        </div>
+                                                                                    )}
+                                                                                </div>
+                                                                            )
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+
+                                                            <div className="grid gap-3 xl:grid-cols-2">
+                                                                <form action={placementLabelsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                                    <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                                    <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                                    <input type="hidden" name="phaseId" value={phase.id} />
+
+                                                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                                                                        Renommer les sous-brackets de placement
+                                                                    </p>
+
+                                                                    <div className="grid gap-2 md:grid-cols-2">
+                                                                        {ranges.map((range) => (
+                                                                            <div key={`placement-label-${phase.id}-${range.key}`}>
+                                                                                <label className="mb-1 block text-xs text-slate-500">Range {range.start}-{range.end}</label>
+                                                                                <input
+                                                                                    name={`placementLabel_${range.start}_${range.end}`}
+                                                                                    defaultValue={labels[range.key] || defaultPlacementLabel(range.start, range.end)}
+                                                                                    className={`${inputCls} w-full`}
+                                                                                    placeholder={defaultPlacementLabel(range.start, range.end)}
+                                                                                />
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        {placementLabelsState.message && (
+                                                                            <p className={`text-[11px] ${placementLabelsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                                                {placementLabelsState.message}
+                                                                            </p>
+                                                                        )}
+                                                                        <div className="ml-auto">
+                                                                            <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
+                                                                                Enregistrer les noms
+                                                                            </LoadingSubmitButton>
+                                                                        </div>
+                                                                    </div>
+                                                                </form>
+
+                                                                <form action={placementSegmentsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                                    <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                                    <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                                    <input type="hidden" name="phaseId" value={phase.id} />
+
+                                                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                                                                        Associer des brackets pour le classement
+                                                                    </p>
+
+                                                                    <textarea
+                                                                        name="segmentsText"
+                                                                        rows={5}
+                                                                        defaultValue={segmentsText}
+                                                                        className={`${inputCls} min-h-28 w-full`}
+                                                                        placeholder={'Ex:\n1-15: Bracket principal\n16-32: Bracket placement 2'}
+                                                                    />
+                                                                    <p className="text-[11px] text-slate-500">
+                                                                        Un segment par ligne. Format: start-end: Nom du segment.
+                                                                    </p>
+
+                                                                    <div className="flex items-center justify-between gap-2">
+                                                                        {placementSegmentsState.message && (
+                                                                            <p className={`text-[11px] ${placementSegmentsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                                                {placementSegmentsState.message}
+                                                                            </p>
+                                                                        )}
+                                                                        <div className="ml-auto">
+                                                                            <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
+                                                                                Enregistrer les associations
+                                                                            </LoadingSubmitButton>
+                                                                        </div>
+                                                                    </div>
+                                                                </form>
+                                                            </div>
+                                                            </div>
+                                                        )
+                                                    })()}
                                                 </StepSection>
                                             )}
 
@@ -2481,6 +3204,102 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                     </div>
                 )}
             </aside>
+
+            {standingsOverlay && standingsOverlayPhase && standingsOverlayGroupConfig && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4" onClick={() => setStandingsOverlay(null)}>
+                    <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-2xl border border-slate-200 bg-white p-4 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                            <div>
+                                <p className="text-xs uppercase tracking-wider text-slate-500">Classements de phase</p>
+                                <h3 className="text-lg font-bold text-slate-900">{standingsOverlayPhase.name}</h3>
+                                <p className="text-xs text-slate-500">
+                                    {standingsOverlay.mode === 'groups' ? 'Vue detaillee par poule' : 'Vue globale de la phase'}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setStandingsOverlay(null)}
+                                className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                                Fermer
+                            </button>
+                        </div>
+
+                        {standingsOverlay.mode === 'groups' ? (
+                            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                                {standingsOverlayByGroup.map((group) => (
+                                    <div key={`overlay-group-${standingsOverlayPhase.id}-${group.groupIndex}`} className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                                        <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-teal-700">Poule {group.groupIndex}</p>
+                                        {group.standings.length === 0 ? (
+                                            <p className="text-xs text-slate-500">Aucune equipe.</p>
+                                        ) : (
+                                            <table className="w-full text-[11px]">
+                                                <thead>
+                                                    <tr className="text-slate-500">
+                                                        <th className="px-1 py-0.5 text-left">#</th>
+                                                        <th className="px-1 py-0.5 text-left">Equipe</th>
+                                                        <th className="px-1 py-0.5 text-right">Pts</th>
+                                                        <th className="px-1 py-0.5 text-right">J</th>
+                                                        <th className="px-1 py-0.5 text-right">GD</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>
+                                                    {group.standings.map((row, rank) => (
+                                                        <tr key={`${group.groupIndex}-${row.teamId}`} className="border-t border-slate-200 text-slate-800">
+                                                            <td className="px-1 py-0.5 font-semibold">{rank + 1}</td>
+                                                            <td className="max-w-[130px] truncate px-1 py-0.5">{row.teamName}</td>
+                                                            <td className="px-1 py-0.5 text-right font-bold">{row.points}</td>
+                                                            <td className="px-1 py-0.5 text-right">{row.played}</td>
+                                                            <td className={`px-1 py-0.5 text-right ${row.goalDiff > 0 ? 'text-emerald-600' : row.goalDiff < 0 ? 'text-red-600' : ''}`}>
+                                                                {row.goalDiff > 0 ? '+' : ''}{row.goalDiff}
+                                                            </td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-2">
+                                {standingsOverlayGlobal.length === 0 ? (
+                                    <p className="text-xs text-slate-500">Aucune equipe classee pour cette phase.</p>
+                                ) : (
+                                    <table className="w-full text-[11px]">
+                                        <thead>
+                                            <tr className="text-slate-500">
+                                                <th className="px-1 py-1 text-left">#</th>
+                                                <th className="px-1 py-1 text-left">Equipe</th>
+                                                <th className="px-1 py-1 text-left">Poule</th>
+                                                <th className="px-1 py-1 text-right">Pts</th>
+                                                <th className="px-1 py-1 text-right">J</th>
+                                                <th className="px-1 py-1 text-right">GD</th>
+                                                <th className="px-1 py-1 text-right">BP</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {standingsOverlayGlobal.map((row, index) => (
+                                                <tr key={`overlay-global-${row.teamId}`} className="border-t border-slate-200 text-slate-800">
+                                                    <td className="px-1 py-1 font-semibold">{index + 1}</td>
+                                                    <td className="px-1 py-1">{row.teamName}</td>
+                                                    <td className="px-1 py-1 text-slate-500">{row.groupIndex ? `Poule ${row.groupIndex}` : '-'}</td>
+                                                    <td className="px-1 py-1 text-right font-bold">{row.points}</td>
+                                                    <td className="px-1 py-1 text-right">{row.played}</td>
+                                                    <td className={`px-1 py-1 text-right ${row.goalDiff > 0 ? 'text-emerald-600' : row.goalDiff < 0 ? 'text-red-600' : ''}`}>
+                                                        {row.goalDiff > 0 ? '+' : ''}{row.goalDiff}
+                                                    </td>
+                                                    <td className="px-1 py-1 text-right">{row.goalsFor}</td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
         </div>
     )
 }

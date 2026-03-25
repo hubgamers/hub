@@ -114,3 +114,133 @@ export async function updateTeam(
         }
     }
 }
+
+export type BulkImportTeamData = {
+    teamName: string
+    teamSlug?: string
+    teamLogoUrl?: string
+    players: {
+        nickname: string
+        number?: number
+        role?: string
+    }[]
+}
+
+export type BulkImportState = {
+    success?: boolean
+    message?: string
+    createdTeams?: number
+    createdPlayers?: number
+    errors?: string[]
+}
+
+export async function bulkCreateTeamsWithPlayers(
+    organizationId: string,
+    teamsData: BulkImportTeamData[]
+): Promise<BulkImportState> {
+    await getAuthUser()
+
+    if (!organizationId || !teamsData || teamsData.length === 0) {
+        return {
+            success: false,
+            message: 'Donnees invalides',
+            errors: ['Aucune equipe a importer'],
+        }
+    }
+
+    const errors: string[] = []
+    let createdTeams = 0
+    let createdPlayers = 0
+
+    const slugify = (value: string) =>
+        value
+            .toLowerCase()
+            .trim()
+            .replace(/[^\w\s-]/g, '')
+            .replace(/[\s_-]+/g, '-')
+            .replace(/^-+|-+$/g, '')
+
+    try {
+        // Process each team
+        for (const teamData of teamsData) {
+            if (!teamData.teamName || teamData.teamName.trim().length === 0) {
+                errors.push('Une equipe a un nom vide')
+                continue
+            }
+
+            // Use provided slug or generate from teamName
+            const teamSlug = teamData.teamSlug && teamData.teamSlug.trim().length > 0 
+                ? slugify(teamData.teamSlug)
+                : slugify(teamData.teamName)
+            
+            if (teamSlug.length === 0) {
+                errors.push(`Impossible de generer un slug pour "${teamData.teamName}"`)
+                continue
+            }
+
+            try {
+                // Check if team already exists
+                const existingTeam = await prisma.team.findUnique({
+                    where: {
+                        organizationId_slug: {
+                            organizationId,
+                            slug: teamSlug,
+                        },
+                    },
+                })
+
+                if (existingTeam) {
+                    errors.push(`Equipe "${teamData.teamName}" existe deja`)
+                    continue
+                }
+
+                // Create team with optional logoUrl
+                const team = await prisma.team.create({
+                    data: {
+                        name: teamData.teamName,
+                        slug: teamSlug,
+                        organizationId,
+                        logoUrl: teamData.teamLogoUrl || null,
+                    },
+                })
+
+                createdTeams++
+
+                // Create players for this team
+                if (teamData.players && teamData.players.length > 0) {
+                    for (const player of teamData.players) {
+                        if (player.nickname && player.nickname.trim().length > 0) {
+                            await prisma.player.create({
+                                data: {
+                                    nickname: player.nickname,
+                                    number: player.number || null,
+                                    role: player.role || null,
+                                    teamId: team.id,
+                                },
+                            })
+                            createdPlayers++
+                        }
+                    }
+                }
+            } catch (error) {
+                errors.push(`Erreur lors de la creation de "${teamData.teamName}": ${error instanceof Error ? error.message : 'Erreur inconnue'}`)
+            }
+        }
+
+        revalidatePath('/admin/teams')
+
+        return {
+            success: errors.length === 0,
+            message: `Import complet: ${createdTeams} équipe(s) créée(s), ${createdPlayers} joueur(s) créé(s)`,
+            createdTeams,
+            createdPlayers,
+            errors: errors.length > 0 ? errors : undefined,
+        }
+    } catch (error) {
+        return {
+            success: false,
+            message: 'Erreur lors de l\'import en masse',
+            errors: [error instanceof Error ? error.message : 'Erreur inconnue'],
+        }
+    }
+}
