@@ -114,62 +114,71 @@ function compareFeaturedGroupMatches(a: PublicMatch, b: PublicMatch) {
 }
 
 export const getPublicTournamentBySlugs = cache(async (orgSlug: string, tournamentSlug: string) => {
-    const tournament = await prisma.tournament.findFirst({
-        where: {
-            slug: tournamentSlug,
-            isPublic: true,
-            organization: { slug: orgSlug },
-        },
-        select: {
-            id: true,
-            name: true,
-            slug: true,
-            description: true,
-            bannerUrl: true,
-            status: true,
-            startDate: true,
-            endDate: true,
-            organization: { select: { id: true, name: true, slug: true } },
-            game: { select: { name: true } },
-            pitches: { select: { id: true, name: true }, orderBy: { name: 'asc' } },
-            phases: {
-                select: { id: true, name: true, type: true, order: true, isCompleted: true, config: true },
-                orderBy: { order: 'asc' },
+    const [tournament, matches] = await Promise.all([
+        prisma.tournament.findFirst({
+            where: {
+                slug: tournamentSlug,
+                isPublic: true,
+                organization: { slug: orgSlug },
             },
-            registrations: {
-                select: {
-                    teamId: true,
-                    seed: true,
-                    isConfirmed: true,
-                    team: { select: { id: true, name: true, slug: true, logoUrl: true } },
+            select: {
+                id: true,
+                name: true,
+                slug: true,
+                description: true,
+                bannerUrl: true,
+                status: true,
+                startDate: true,
+                endDate: true,
+                organization: { select: { id: true, name: true, slug: true } },
+                game: { select: { name: true } },
+                pitches: { select: { id: true, name: true }, orderBy: { name: 'asc' } },
+                phases: {
+                    select: { id: true, name: true, type: true, order: true, isCompleted: true, config: true },
+                    orderBy: { order: 'asc' },
                 },
-                orderBy: [{ seed: 'asc' }, { registeredAt: 'asc' }],
-            },
-            actionLogs: {
-                select: {
-                    actionType: true,
-                    payload: true,
-                    createdAt: true,
+                registrations: {
+                    select: {
+                        teamId: true,
+                        seed: true,
+                        isConfirmed: true,
+                        team: { select: { id: true, name: true, slug: true, logoUrl: true } },
+                    },
+                    orderBy: [{ seed: 'asc' }, { registeredAt: 'asc' }],
                 },
-                orderBy: { createdAt: 'desc' },
-                take: 30,
+                actionLogs: {
+                    select: {
+                        actionType: true,
+                        payload: true,
+                        createdAt: true,
+                    },
+                    orderBy: { createdAt: 'desc' },
+                    take: 30,
+                },
             },
-        },
-    })
+        }),
+        prisma.match.findMany({
+            where: {
+                phase: {
+                    tournament: {
+                        slug: tournamentSlug,
+                        isPublic: true,
+                        organization: { slug: orgSlug },
+                    },
+                },
+            },
+            include: {
+                pitch: { select: { id: true, name: true } },
+                phase: { select: { id: true, name: true, type: true } },
+                homeTeam: { select: { id: true, name: true } },
+                awayTeam: { select: { id: true, name: true } },
+                result: { select: { homeScore: true, awayScore: true, notes: true } },
+            },
+            orderBy: [{ status: 'asc' }, { scheduledAt: 'asc' }, { createdAt: 'desc' }],
+        }),
+    ])
 
     if (!tournament) return null
-
-    const matches = await prisma.match.findMany({
-        where: { phase: { tournamentId: tournament.id } },
-        include: {
-            pitch: { select: { id: true, name: true } },
-            phase: { select: { id: true, name: true, type: true } },
-            homeTeam: { select: { id: true, name: true } },
-            awayTeam: { select: { id: true, name: true } },
-            result: { select: { homeScore: true, awayScore: true, notes: true } },
-        },
-        orderBy: [{ status: 'asc' }, { scheduledAt: 'asc' }, { createdAt: 'desc' }],
-    })
 
     const sortedTournament = {
         ...tournament,
