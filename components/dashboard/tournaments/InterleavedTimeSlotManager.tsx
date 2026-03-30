@@ -140,8 +140,9 @@ export default function InterleavedTimeSlotManager({
   const handleSave = useCallback(async () => {
     setIsSaving(true)
     try {
+      const baseConfig = currentConfig && typeof currentConfig === 'object' ? currentConfig : {}
       const newConfig = {
-        ...currentConfig,
+        ...baseConfig,
         interleavedTimeSlots: timeSlots.map((slot) => ({
           id: slot.id,
           startTimeMs: slot.startTimeMs,

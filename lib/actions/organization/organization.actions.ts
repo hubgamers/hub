@@ -157,7 +157,8 @@ export async function addOrganizationMember(
       };
     }
 
-    const canManageMembers = [OrgRole.OWNER, OrgRole.ADMIN].includes(requesterMembership.role);
+    const canManageMembers =
+      requesterMembership.role === OrgRole.OWNER || requesterMembership.role === OrgRole.ADMIN;
     if (!canManageMembers) {
       return {
         success: false,
