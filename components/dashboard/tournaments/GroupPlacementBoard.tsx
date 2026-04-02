@@ -137,8 +137,8 @@ export default function GroupPlacementBoard({
             {state.message && (
                 <div
                     className={`rounded-md border px-3 py-2 text-xs ${state.success
-                            ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                            : "border-red-500/30 bg-red-500/10 text-red-300"
+                        ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                        : "border-red-500/30 bg-red-500/10 text-red-300"
                         }`}
                 >
                     {state.message}
@@ -151,19 +151,21 @@ export default function GroupPlacementBoard({
                     {unassignedTeams.length === 0 ? (
                         <span className="text-xs text-slate-500">Toutes les équipes sont placees.</span>
                     ) : (
-                        unassignedTeams.map((team) => (
-                            <div
-                                key={`${phaseId}-pool-${team.id}`}
-                                draggable
-                                onDragStart={(event) => {
-                                    event.dataTransfer.setData("text/plain", team.id);
-                                    event.dataTransfer.effectAllowed = "move";
-                                }}
-                                className="cursor-grab rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
-                            >
-                                {team.name}
-                            </div>
-                        ))
+                        unassignedTeams.sort((a, b) => {
+                            return a.team.name.localeCompare(b.team.name);
+                        }).map((team) => (
+                    <div
+                        key={`${phaseId}-pool-${team.id}`}
+                        draggable
+                        onDragStart={(event) => {
+                            event.dataTransfer.setData("text/plain", team.id);
+                            event.dataTransfer.effectAllowed = "move";
+                        }}
+                        className="cursor-grab rounded-md border border-slate-300 bg-white px-2 py-1 text-xs text-slate-800"
+                    >
+                        {team.name}
+                    </div>
+                    ))
                     )}
                 </div>
             </div>

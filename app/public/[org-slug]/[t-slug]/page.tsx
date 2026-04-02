@@ -56,6 +56,7 @@ export default async function PublicTournamentPage({
         .sort((a, b) => a.order - b.order)
     const bracketAPhase = placementPhases[0] ?? null
     const bracketBPhase = placementPhases[1] ?? null
+    const hasGroupPhase = tournament.phases.some((phase) => phase.type === 'GROUP')
 
     return (
         <main className="min-h-screen bg-white text-slate-900">
@@ -74,6 +75,19 @@ export default async function PublicTournamentPage({
                         >
                             Overlay poules
                         </Link>
+
+                        {hasGroupPhase ? (
+                            <Link
+                                href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/overlay/standings`, bg, bgDim)}
+                                className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-xs font-semibold text-orange-700 hover:bg-orange-100"
+                            >
+                                Overlay classements en direct
+                            </Link>
+                        ) : (
+                            <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-semibold text-slate-500">
+                                Overlay classements indisponible
+                            </span>
+                        )}
 
                         {bracketAPhase ? (
                             <Link

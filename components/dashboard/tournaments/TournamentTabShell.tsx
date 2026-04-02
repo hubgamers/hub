@@ -1982,7 +1982,9 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                     {tournament.registrations.length === 0 ? (
                                         <p className="text-center text-xs text-slate-500 py-4">Aucune equipe inscrite.</p>
                                     ) : (
-                                        tournament.registrations.map((reg) => (
+                                        tournament.registrations.sort((a, b) => {
+                                            return a.team.name.localeCompare(b.team.name);
+                                        }).map((reg) => (
                                             <div key={reg.id} className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
                                                 <div className="flex items-center gap-2">
                                                     <div className={`h-2 w-2 rounded-full ${reg.isConfirmed ? 'bg-emerald-400' : 'bg-amber-400'}`} />
@@ -2315,6 +2317,22 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
 
                                         {/* Step 4: Standings */}
                                         <StepSection num={4} title="Classements en direct" desc="Mis a jour apres chaque enregistrement de score. Tiebreaker : Pts > Diff buts > Buts marques." color="amber">
+                                            <div className="mb-3 flex flex-wrap gap-2">
+                                                <Link
+                                                    href={`/public/${orgSlug}/${tournament.slug}/overlay/standings?phaseId=${phase.id}&mode=groups`}
+                                                    target="_blank"
+                                                    className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
+                                                >
+                                                    Overlay classement par poule
+                                                </Link>
+                                                <Link
+                                                    href={`/public/${orgSlug}/${tournament.slug}/overlay/standings?phaseId=${phase.id}&mode=global`}
+                                                    target="_blank"
+                                                    className="rounded-md border border-teal-300 px-2 py-1 text-[11px] font-semibold text-teal-700 hover:bg-teal-50"
+                                                >
+                                                    Overlay classement global
+                                                </Link>
+                                            </div>
                                             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                                                 {Array.from({ length: groupConfig.count }, (_, i) => {
                                                     const gIdx = i + 1
@@ -2380,11 +2398,10 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                             key={`bracket-tab-${phase.id}`}
                                             type="button"
                                             onClick={() => setActiveBracketPhaseId(phase.id)}
-                                            className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                                                (activeBracketPhaseId || bracketPhases[0]?.id) === phase.id
+                                            className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${(activeBracketPhaseId || bracketPhases[0]?.id) === phase.id
                                                     ? 'border-teal-600 bg-teal-50 text-teal-700'
                                                     : 'border-slate-300 bg-white text-slate-600 hover:bg-slate-50'
-                                            }`}
+                                                }`}
                                         >
                                             {phase.name}
                                         </button>
@@ -2394,11 +2411,10 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                             key={`bracket-group-tab-${group.group}`}
                                             type="button"
                                             onClick={() => setActiveBracketPhaseId(group.key)}
-                                            className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${
-                                                activeBracketPhaseId === group.key
+                                            className={`rounded-lg border px-3 py-2 text-xs font-semibold transition ${activeBracketPhaseId === group.key
                                                     ? 'border-cyan-600 bg-cyan-50 text-cyan-700'
                                                     : 'border-cyan-300 bg-white text-cyan-700 hover:bg-cyan-50'
-                                            }`}
+                                                }`}
                                         >
                                             Groupe {group.group}
                                         </button>
@@ -2717,80 +2733,80 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                                                     </div>
                                                                 </div>
 
-                                                            <div className="grid gap-3 xl:grid-cols-2">
-                                                                <form action={placementLabelsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                                                    <input type="hidden" name="tournamentId" value={tournament.id} />
-                                                                    <input type="hidden" name="orgSlug" value={orgSlug} />
-                                                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
-                                                                    <input type="hidden" name="phaseId" value={phase.id} />
+                                                                <div className="grid gap-3 xl:grid-cols-2">
+                                                                    <form action={placementLabelsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                                        <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                                        <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                                        <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                                        <input type="hidden" name="phaseId" value={phase.id} />
 
-                                                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-                                                                        Renommer les sous-brackets de placement
-                                                                    </p>
+                                                                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                                                                            Renommer les sous-brackets de placement
+                                                                        </p>
 
-                                                                    <div className="grid gap-2 md:grid-cols-2">
-                                                                        {ranges.map((range) => (
-                                                                            <div key={`placement-label-${phase.id}-${range.key}`}>
-                                                                                <label className="mb-1 block text-xs text-slate-500">Range {range.start}-{range.end}</label>
-                                                                                <input
-                                                                                    name={`placementLabel_${range.start}_${range.end}`}
-                                                                                    defaultValue={labels[range.key] || defaultPlacementLabel(range.start, range.end)}
-                                                                                    className={`${inputCls} w-full`}
-                                                                                    placeholder={defaultPlacementLabel(range.start, range.end)}
-                                                                                />
+                                                                        <div className="grid gap-2 md:grid-cols-2">
+                                                                            {ranges.map((range) => (
+                                                                                <div key={`placement-label-${phase.id}-${range.key}`}>
+                                                                                    <label className="mb-1 block text-xs text-slate-500">Range {range.start}-{range.end}</label>
+                                                                                    <input
+                                                                                        name={`placementLabel_${range.start}_${range.end}`}
+                                                                                        defaultValue={labels[range.key] || defaultPlacementLabel(range.start, range.end)}
+                                                                                        className={`${inputCls} w-full`}
+                                                                                        placeholder={defaultPlacementLabel(range.start, range.end)}
+                                                                                    />
+                                                                                </div>
+                                                                            ))}
+                                                                        </div>
+
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            {placementLabelsState.message && (
+                                                                                <p className={`text-[11px] ${placementLabelsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                                                    {placementLabelsState.message}
+                                                                                </p>
+                                                                            )}
+                                                                            <div className="ml-auto">
+                                                                                <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
+                                                                                    Enregistrer les noms
+                                                                                </LoadingSubmitButton>
                                                                             </div>
-                                                                        ))}
-                                                                    </div>
-
-                                                                    <div className="flex items-center justify-between gap-2">
-                                                                        {placementLabelsState.message && (
-                                                                            <p className={`text-[11px] ${placementLabelsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
-                                                                                {placementLabelsState.message}
-                                                                            </p>
-                                                                        )}
-                                                                        <div className="ml-auto">
-                                                                            <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
-                                                                                Enregistrer les noms
-                                                                            </LoadingSubmitButton>
                                                                         </div>
-                                                                    </div>
-                                                                </form>
+                                                                    </form>
 
-                                                                <form action={placementSegmentsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                                                    <input type="hidden" name="tournamentId" value={tournament.id} />
-                                                                    <input type="hidden" name="orgSlug" value={orgSlug} />
-                                                                    <input type="hidden" name="tournamentSlug" value={tournament.slug} />
-                                                                    <input type="hidden" name="phaseId" value={phase.id} />
+                                                                    <form action={placementSegmentsAction} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                                        <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                                        <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                                        <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                                        <input type="hidden" name="phaseId" value={phase.id} />
 
-                                                                    <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
-                                                                        Associer des brackets pour le classement
-                                                                    </p>
+                                                                        <p className="text-xs font-semibold uppercase tracking-wider text-slate-600">
+                                                                            Associer des brackets pour le classement
+                                                                        </p>
 
-                                                                    <textarea
-                                                                        name="segmentsText"
-                                                                        rows={5}
-                                                                        defaultValue={segmentsText}
-                                                                        className={`${inputCls} min-h-28 w-full`}
-                                                                        placeholder={'Ex:\n1-15: Bracket principal\n16-32: Bracket placement 2'}
-                                                                    />
-                                                                    <p className="text-[11px] text-slate-500">
-                                                                        Un segment par ligne. Format: start-end: Nom du segment.
-                                                                    </p>
+                                                                        <textarea
+                                                                            name="segmentsText"
+                                                                            rows={5}
+                                                                            defaultValue={segmentsText}
+                                                                            className={`${inputCls} min-h-28 w-full`}
+                                                                            placeholder={'Ex:\n1-15: Bracket principal\n16-32: Bracket placement 2'}
+                                                                        />
+                                                                        <p className="text-[11px] text-slate-500">
+                                                                            Un segment par ligne. Format: start-end: Nom du segment.
+                                                                        </p>
 
-                                                                    <div className="flex items-center justify-between gap-2">
-                                                                        {placementSegmentsState.message && (
-                                                                            <p className={`text-[11px] ${placementSegmentsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
-                                                                                {placementSegmentsState.message}
-                                                                            </p>
-                                                                        )}
-                                                                        <div className="ml-auto">
-                                                                            <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
-                                                                                Enregistrer les associations
-                                                                            </LoadingSubmitButton>
+                                                                        <div className="flex items-center justify-between gap-2">
+                                                                            {placementSegmentsState.message && (
+                                                                                <p className={`text-[11px] ${placementSegmentsState.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                                                                    {placementSegmentsState.message}
+                                                                                </p>
+                                                                            )}
+                                                                            <div className="ml-auto">
+                                                                                <LoadingSubmitButton className={`${btnGhost} disabled:opacity-60`} loadingLabel="Enregistrement...">
+                                                                                    Enregistrer les associations
+                                                                                </LoadingSubmitButton>
+                                                                            </div>
                                                                         </div>
-                                                                    </div>
-                                                                </form>
-                                                            </div>
+                                                                    </form>
+                                                                </div>
                                                             </div>
                                                         )
                                                     })()}
@@ -3011,53 +3027,53 @@ export default function TournamentTabShell({ orgSlug, tournament, availableTeams
                                         })
 
                                         return (
-                                        <div key={`planning-time-${slot.at}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                                            <div className="mb-2 flex items-center justify-between">
-                                                <p className="text-sm font-bold text-amber-700">{slot.label}</p>
-                                                <div className="flex items-center gap-2">
-                                                    <span className="text-[11px] text-slate-500">{slot.matches.length} match(s)</span>
-                                                    <form action={slotLaunchAction}>
-                                                        <input type="hidden" name="tournamentId" value={tournament.id} />
-                                                        <input type="hidden" name="orgSlug" value={orgSlug} />
-                                                        <input type="hidden" name="tournamentSlug" value={tournament.slug} />
-                                                        <input type="hidden" name="slotAt" value={slotIso} />
-                                                        <input type="hidden" name="timerMinutes" value={String(slotTimerMinutes)} />
-                                                        <LoadingSubmitButton
-                                                            disabled={startableMatches.length === 0}
-                                                            className="rounded-md border border-emerald-300 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
-                                                            loadingLabel="Lancement..."
+                                            <div key={`planning-time-${slot.at}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                                                <div className="mb-2 flex items-center justify-between">
+                                                    <p className="text-sm font-bold text-amber-700">{slot.label}</p>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[11px] text-slate-500">{slot.matches.length} match(s)</span>
+                                                        <form action={slotLaunchAction}>
+                                                            <input type="hidden" name="tournamentId" value={tournament.id} />
+                                                            <input type="hidden" name="orgSlug" value={orgSlug} />
+                                                            <input type="hidden" name="tournamentSlug" value={tournament.slug} />
+                                                            <input type="hidden" name="slotAt" value={slotIso} />
+                                                            <input type="hidden" name="timerMinutes" value={String(slotTimerMinutes)} />
+                                                            <LoadingSubmitButton
+                                                                disabled={startableMatches.length === 0}
+                                                                className="rounded-md border border-emerald-300 px-2 py-1 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                                                                loadingLabel="Lancement..."
+                                                            >
+                                                                Lancer ({startableMatches.length})
+                                                            </LoadingSubmitButton>
+                                                        </form>
+                                                        <Link
+                                                            href={`/public/${orgSlug}/${tournament.slug}/overlay/pools?${overlayParams.toString()}`}
+                                                            target="_blank"
+                                                            className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
                                                         >
-                                                            Lancer ({startableMatches.length})
-                                                        </LoadingSubmitButton>
-                                                    </form>
-                                                    <Link
-                                                        href={`/public/${orgSlug}/${tournament.slug}/overlay/pools?${overlayParams.toString()}`}
-                                                        target="_blank"
-                                                        className="rounded-md border border-amber-300 px-2 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-50"
-                                                    >
-                                                        Overlay timer
-                                                    </Link>
+                                                            Overlay timer
+                                                        </Link>
+                                                    </div>
+                                                </div>
+                                                <div className="space-y-1.5">
+                                                    {slot.matches.map((match) => (
+                                                        <div key={`planning-time-match-${match.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            {(() => {
+                                                                const groupLabel = getMatchGroupLabel(match)
+                                                                return groupLabel ? <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">{groupLabel}</p> : null
+                                                            })()}
+                                                            <p className="text-xs font-semibold">
+                                                                {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'}
+                                                            </p>
+                                                            <p className="text-[11px] text-slate-500">
+                                                                {match.pitch.name} • {match.phase.name}
+                                                                {match.roundNumber ? ` • Round ${match.roundNumber}` : ''}
+                                                                {match.bracketPos ? ` • ${match.bracketPos}` : ''}
+                                                            </p>
+                                                        </div>
+                                                    ))}
                                                 </div>
                                             </div>
-                                            <div className="space-y-1.5">
-                                                {slot.matches.map((match) => (
-                                                    <div key={`planning-time-match-${match.id}`} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                                                        {(() => {
-                                                            const groupLabel = getMatchGroupLabel(match)
-                                                            return groupLabel ? <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700">{groupLabel}</p> : null
-                                                        })()}
-                                                        <p className="text-xs font-semibold">
-                                                            {match.homeTeam?.name || 'TBD'} vs {match.awayTeam?.name || 'TBD'}
-                                                        </p>
-                                                        <p className="text-[11px] text-slate-500">
-                                                            {match.pitch.name} • {match.phase.name}
-                                                            {match.roundNumber ? ` • Round ${match.roundNumber}` : ''}
-                                                            {match.bracketPos ? ` • ${match.bracketPos}` : ''}
-                                                        </p>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        </div>
                                         )
                                     })
                                 )}
