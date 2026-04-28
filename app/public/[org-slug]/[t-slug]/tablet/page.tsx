@@ -13,6 +13,7 @@ interface TabletPageProps {
 export default async function TabletPage({ params }: TabletPageProps) {
   const { 'org-slug': orgSlug, 't-slug': tSlug } = await params
 
+  
   // Fetch the tournament
   const tournament = await prisma.tournament.findFirst({
     where: {
