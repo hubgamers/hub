@@ -260,9 +260,14 @@ const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketR
               />
 
               {/* Connecteur Sortant (Droite) - Structure en Bracket */}
+              {/* Connecteur Sortant (Droite) - FIX */}
               {!isLast && (
                 <div className="absolute right-0 translate-x-full flex items-center h-full w-2">
+
+                  {/* ligne horizontale vers le prochain match */}
                   <div className={`w-full h-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`} />
+
+                  {/* ligne verticale de liaison entre les matchs */}
                   {matches.length > 1 && (
                     <div
                       className={`absolute right-0 w-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`}
