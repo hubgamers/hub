@@ -179,9 +179,6 @@ const MatchBox = ({ players, isFinal, width, scheduledAt, pitchName, isLive, isF
   const scores = players.map(p => p.score ?? -1);
   const highImg = Math.max(...scores);
 
-  // On considère le match en cours si au moins un score est saisi et que ce n'est pas fini
-  // Tu peux aussi passer "status" en props pour plus de précision
-
   return (
     <div className={`
       relative flex flex-col bg-slate-900/90 border-l-2 rounded-sm overflow-hidden ${width} z-10 backdrop-blur-md transition-all ml-4
@@ -235,6 +232,7 @@ const MatchBox = ({ players, isFinal, width, scheduledAt, pitchName, isLive, isF
   );
 };
 
+// COMPOSANT CORRIGÉ : Utilisation native du système Flexbox pour les traits
 const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketRoundData; roundIdx: number; isLast: boolean; matchWidth: string }) => {
   const matches = round.matches;
 
@@ -244,11 +242,19 @@ const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketR
         {round.title}
       </div>
 
-      <div className="flex flex-col justify-around flex-grow relative">
+      <div className="flex flex-col flex-grow relative w-full">
         {matches.map((match, idx) => {
           const isTop = idx % 2 === 0;
+          const isOddLast = isTop && idx === matches.length - 1;
+
           return (
-            <div key={match.id} className="relative flex items-center justify-center w-full py-2">
+            <div key={match.id} className="relative flex items-center flex-1 w-full">
+              
+              {/* Connecteur Entrant (Gauche) : Comble le "ml-4" natif de MatchBox */}
+              {roundIdx > 0 && (
+                <div className="absolute left-0 top-1/2 w-4 h-[1px] -translate-y-1/2 bg-white/20" />
+              )}
+
               <MatchBox
                 players={match.players}
                 isFinal={isLast && matches.length === 1}
@@ -259,22 +265,19 @@ const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketR
                 isFinished={match.isFinished}
               />
 
-              {/* Connecteur Sortant (Droite) - Structure en Bracket */}
-              {/* Connecteur Sortant (Droite) - FIX */}
+              {/* Connecteurs Sortants (Droite) */}
               {!isLast && (
-                <div className="absolute right-0 translate-x-full flex items-center h-full w-2">
+                <div className={`relative flex-1 self-stretch min-w-[8px] ${round.color || 'text-white'}`}>
+                  {/* Ligne horizontale vers la prochaine étape */}
+                  <div className="absolute top-1/2 left-0 w-full h-[1px] -translate-y-1/2 bg-current opacity-50" />
 
-                  {/* ligne horizontale vers le prochain match */}
-                  <div className={`w-full h-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`} />
-
-                  {/* ligne verticale de liaison entre les matchs */}
-                  {matches.length > 1 && (
+                  {/* Ligne verticale de liaison entre la paire */}
+                  {!isOddLast && matches.length > 1 && (
                     <div
-                      className={`absolute right-0 w-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`}
+                      className="absolute right-0 w-[1px] bg-current opacity-50"
                       style={{
-                        height: '100%',
-                        top: isTop ? '50%' : 'auto',
-                        bottom: !isTop ? '50%' : 'auto'
+                        top: isTop ? '50%' : '0',
+                        bottom: isTop ? '0' : '50%'
                       }}
                     />
                   )}
@@ -394,7 +397,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
 
       <header className="relative z-10 flex items-end justify-between mb-4 pt-4 border-b border-white/10 pb-6">
 
-        {/* LEFT: PHASE INFO (Anciennement dans le footer) */}
+        {/* LEFT: PHASE INFO */}
         <div className="flex flex-col items-start min-w-[250px]">
           <span className="text-[10px] text-[#ccff00] font-black uppercase tracking-[0.2em] mb-1">
             Tableau Officiel
@@ -423,7 +426,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
       </header>
 
       <main className="flex-1 flex gap-4 min-h-0 relative z-10 px-2 overflow-hidden">
-        {/* WINNER BRACKET (Génération principale) */}
+        {/* WINNER BRACKET */}
         <div className="w-[30%] flex flex-col h-full">
           <BracketCard
             rounds={winnerData}
@@ -437,7 +440,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
             {sizedPlacementTrees.length > 0 ? (
               <div className="h-full flex flex-col gap-4">
 
-                {/* SECTION PHASES COURTES (Grille fixe 6 colonnes) */}
+                {/* SECTION PHASES COURTES */}
                 {compactPlacementTrees.length > 0 && (
                   <div className="w-full">
                     <div className="grid grid-cols-6 gap-2 w-full">
@@ -454,7 +457,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
                   </div>
                 )}
 
-                {/* SECTION GRANDS BRACKETS (Remplissage de l'espace restant) */}
+                {/* SECTION GRANDS BRACKETS */}
                 <div className="flex-1 min-h-0">
                   {mainPlacementTrees.length > 0 ? (
                     <div className="h-full grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 auto-rows-fr">
@@ -482,7 +485,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
             )}
           </div>
         ) : (
-          /* FALLBACK : AFFICHAGE CLASSIQUE SI PAS DE SPLIT */
+          /* FALLBACK */
           <div className="flex-1 grid grid-cols-2 gap-4">
             {placementTrees.map((tree) => (
               <BracketCard
