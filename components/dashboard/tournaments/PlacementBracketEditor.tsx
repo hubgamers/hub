@@ -38,6 +38,8 @@ type DisplayMatch = {
   id: string;
   players: DisplayPlayer[];
   info: string;
+  isLive?: boolean;
+  isFinished?: boolean;
   scheduledAt: string | null;
   pitchName: string | null;
 };
@@ -74,7 +76,8 @@ type AppProps = {
   backgroundDim?: number;
 };
 
-const WINNER_COLORS = ['text-sky-400', 'text-yellow-500', 'text-orange-500', 'text-[#ccff00]'];
+// Utilisation de la couleur personnalisée pour les gagnants
+const WINNER_COLORS = ['text-sky-400', 'text-orange-500', 'text-[#ccff00]', 'text-[#ccff00]'];
 
 function formatRemainingTime(totalSeconds: number): string {
   const minutes = Math.floor(totalSeconds / 60).toString().padStart(2, '0');
@@ -106,6 +109,8 @@ function toDisplayMatch(match: PlacementMatch): DisplayMatch {
       { name: match.awayTeamName || 'À DÉFINIR', score: match.awayScore },
     ],
     info: `M${match.bracketPos?.split('-M')[1] || ''}`,
+    isLive: match.status === 'LIVE',
+    isFinished: match.status === 'FINISHED',
   };
 }
 
@@ -170,24 +175,65 @@ function countTreeMatches(tree: PlacementTree): number {
 
 // --- UI Components ---
 
-const MatchBox = ({ players, isFinal, width, scheduledAt, pitchName }: { players: DisplayPlayer[]; isFinal: boolean; width: string; scheduledAt: string | null; pitchName: string | null }) => (
-  <div className={`relative flex flex-col bg-slate-950 border ${isFinal ? 'border-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.2)]' : 'border-white/10'} rounded overflow-hidden ${width} z-10`}>
-    {(scheduledAt || pitchName) && (
-      <div className="px-2 pt-0.5 text-[6px] font-semibold text-teal-400 opacity-80 tracking-wide">
-        {scheduledAt && new Date(scheduledAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-        {pitchName && <span className={scheduledAt ? 'ml-1 opacity-60' : ''}>{scheduledAt ? '· ' : ''}{pitchName}</span>}
+const MatchBox = ({ players, isFinal, width, scheduledAt, pitchName, isLive, isFinished }: { players: DisplayPlayer[]; isFinal: boolean; width: string; scheduledAt: string | null; pitchName: string | null; isLive?: boolean; isFinished?: boolean }) => {
+  const scores = players.map(p => p.score ?? -1);
+  const highImg = Math.max(...scores);
+
+  // On considère le match en cours si au moins un score est saisi et que ce n'est pas fini
+  // Tu peux aussi passer "status" en props pour plus de précision
+
+  return (
+    <div className={`
+      relative flex flex-col bg-slate-900/90 border-l-2 rounded-sm overflow-hidden ${width} z-10 backdrop-blur-md transition-all ml-4
+      ${isFinal ? 'border-[#ccff00] shadow-[0_0_15px_rgba(204,255,0,0.15)]' : 'border-white/20'}
+      ${isLive ? 'border-l-emerald-400 shadow-[0_0_10px_rgba(52,211,153,0.3)] animate-pulse' : ''}
+      ${isFinished ? 'border-sky-400 shadow-[0_0_10px_rgba(56,189,248,0.3)]' : ''}
+    `}>
+
+      {/* Header : Heure et Terrain */}
+      {(scheduledAt || pitchName) && (
+        <div className={`flex items-center justify-between px-1.5 py-0.5 border-b border-white/5 ${isLive ? 'bg-emerald-500/10' : 'bg-white/5'}`}>
+          <div className="flex items-center gap-1">
+            <div className={`w-1 h-1 rounded-full ${isLive ? 'bg-emerald-400 animate-bounce' : 'bg-[#ccff00]'}`} />
+            <span className={`text-[7px] font-black tracking-tighter uppercase ${isLive ? 'text-emerald-400' : 'text-slate-400'}`}>
+              {isLive ? 'EN DIRECT' : (scheduledAt && new Date(scheduledAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }))}
+            </span>
+          </div>
+          {pitchName && (
+            <span className="text-[7px] font-bold text-white/40 uppercase truncate max-w-[40px]">
+              {pitchName}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Liste des joueurs/équipes */}
+      <div className="flex flex-col">
+        {players.map((p, i) => {
+          const isWinner = p.score !== null && p.score === highImg && scores[0] !== scores[1];
+
+          return (
+            <div
+              key={i}
+              className={`flex justify-between items-center px-2 py-1 h-5 transition-colors ${i === 0 ? 'border-b border-white/5' : ''} ${isWinner ? 'bg-[#ccff00]/5' : ''}`}
+            >
+              <span className={`text-[8px] font-black uppercase italic truncate tracking-tight ${isWinner ? 'text-white' : p.name != 'TBD' ? 'text-slate-300' : 'text-slate-600'}`}>
+                {p.name}
+              </span>
+
+              <div className="flex items-center gap-1">
+                {isWinner && <div className="w-0.5 h-2 bg-[#ccff00]" />}
+                <span className={`text-[9px] font-black tabular-nums ${isWinner ? 'text-[#ccff00]' : isLive ? 'text-emerald-400' : 'text-white/90'}`}>
+                  {p.score ?? '-'}
+                </span>
+              </div>
+            </div>
+          );
+        })}
       </div>
-    )}
-    {players.map((p, i) => (
-      <div key={i} className={`flex justify-between items-center px-2 py-1 h-4 ${i === 0 ? 'border-b border-white/5' : ''}`}>
-        <span className={`text-[7px] font-bold uppercase italic truncate ${p.score !== null ? 'text-white' : 'text-slate-500'}`}>
-          {p.name}
-        </span>
-        <span className="text-[7px] font-black text-yellow-400 ml-1">{p.score ?? ''}</span>
-      </div>
-    ))}
-  </div>
-);
+    </div>
+  );
+};
 
 const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketRoundData; roundIdx: number; isLast: boolean; matchWidth: string }) => {
   const matches = round.matches;
@@ -197,34 +243,28 @@ const BracketRound = ({ round, roundIdx, isLast, matchWidth }: { round: BracketR
       <div className={`text-[7px] font-black text-center mb-2 uppercase tracking-widest opacity-60 ${round.color || 'text-slate-400'}`}>
         {round.title}
       </div>
-      
+
       <div className="flex flex-col justify-around flex-grow relative">
         {matches.map((match, idx) => {
           const isTop = idx % 2 === 0;
           return (
             <div key={match.id} className="relative flex items-center justify-center w-full py-2">
-              {/* Connecteur Entrant (Gauche) */}
-              {roundIdx > 0 && (
-                <div className="absolute left-0 w-2 h-[1px] bg-white/20 -translate-x-full" />
-              )}
-
-              <MatchBox 
-                players={match.players} 
-                isFinal={isLast && matches.length === 1} 
+              <MatchBox
+                players={match.players}
+                isFinal={isLast && matches.length === 1}
                 width={matchWidth}
                 scheduledAt={match.scheduledAt}
                 pitchName={match.pitchName}
+                isLive={match.isLive}
+                isFinished={match.isFinished}
               />
 
               {/* Connecteur Sortant (Droite) - Structure en Bracket */}
               {!isLast && (
                 <div className="absolute right-0 translate-x-full flex items-center h-full w-2">
-                  {/* Branche horizontale sortante */}
                   <div className={`w-full h-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`} />
-                  
-                  {/* Branche verticale de jonction */}
                   {matches.length > 1 && (
-                    <div 
+                    <div
                       className={`absolute right-0 w-[1px] ${round.color ? 'bg-current opacity-50' : 'bg-white/20'}`}
                       style={{
                         height: '100%',
@@ -247,18 +287,18 @@ const BracketCard = ({ title, rounds, className = '', matchWidth = 'w-[80px]' }:
   <div className={`flex flex-col bg-white/[0.02] border border-white/5 rounded p-2 overflow-hidden ${className}`}>
     {title && (
       <div className="flex items-center gap-2 mb-2">
-        <div className="h-2.5 w-0.5 bg-yellow-500 shadow-[0_0_5px_rgba(234,179,8,0.5)]"></div>
+        <div className="h-2.5 w-0.5 bg-[#ccff00] shadow-[0_0_5px_rgba(204,255,0,0.5)]"></div>
         <h3 className="text-[8px] font-black text-white/80 uppercase italic tracking-wider">{title}</h3>
       </div>
     )}
     <div className="flex flex-1 h-full">
       {rounds.length > 0 ? (
         rounds.map((r, i) => (
-          <BracketRound 
-            key={i} 
-            round={r} 
-            roundIdx={i} 
-            isLast={i === rounds.length - 1} 
+          <BracketRound
+            key={i}
+            round={r}
+            roundIdx={i}
+            isLast={i === rounds.length - 1}
             matchWidth={matchWidth}
           />
         ))
@@ -314,7 +354,6 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
   const currentPhase = sortedPhases.find((phase) => phase.id === initialPhaseId) ?? sortedPhases[0];
   const isPlacementBracketPhase = currentPhase?.type === 'PLACEMENT_BRACKET';
 
-  // Keep the editor scoped to the current phase to avoid mixing trees across phases.
   const phaseMatches = currentPhase
     ? matches.filter(match => match.phaseId === currentPhase.id)
     : matches;
@@ -334,6 +373,7 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
 
   const compactPlacementTrees = sizedPlacementTrees.filter((tree) => tree.isCompact);
   const mainPlacementTrees = sizedPlacementTrees.filter((tree) => !tree.isCompact);
+
   const rootStyle: React.CSSProperties | undefined = backgroundImageUrl
     ? {
       backgroundImage: `linear-gradient(rgba(3, 7, 18, ${backgroundDim}), rgba(3, 7, 18, ${backgroundDim})), url(${backgroundImageUrl})`,
@@ -345,51 +385,71 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
 
   return (
     <div className="h-screen w-screen bg-[#030712] text-slate-200 font-sans p-4 flex flex-col overflow-hidden relative" style={rootStyle}>
-      {/* Background FX */}
       <div className="absolute top-0 left-0 w-full h-full bg-[radial-gradient(circle_at_50%_-20%,_#1e293b_0%,_transparent_70%)] pointer-events-none opacity-50" />
-      
-      <header className="relative z-10 flex flex-col items-center mb-6">
-        <div className="flex items-center gap-4">
-          <div className="h-[1px] w-12 bg-gradient-to-r from-transparent to-yellow-500/50" />
-          <h1 className="text-5xl font-black italic tracking-tighter uppercase text-white">
-            Pulse<span className="text-yellow-500">.</span>
+
+      <header className="relative z-10 flex items-end justify-between mb-4 pt-4 border-b border-white/10 pb-6">
+
+        {/* LEFT: PHASE INFO (Anciennement dans le footer) */}
+        <div className="flex flex-col items-start min-w-[250px]">
+          <span className="text-[10px] text-[#ccff00] font-black uppercase tracking-[0.2em] mb-1">
+            Tableau Officiel
+          </span>
+          <h2 className="text-4xl font-black italic text-white leading-none uppercase tracking-tighter">
+            {currentPhase?.name || 'Phase de Classement'}
+          </h2>
+        </div>
+
+        {/* CENTER: MEGA TIMER */}
+        {timerLabel && (
+          <div className={`flex flex-col items-center gap-2 text-sm font-black tracking-tighter ${remainingTimerSeconds === 0 ? 'text-rose-500 animate-pulse' : 'text-[#ccff00]'}`}>
+            <span className="text-[9px] opacity-60 tracking-widest uppercase not-italic">{timerMode === 'BREAK' ? 'Temps de battement' : 'Session en cours'}</span>
+            <h1 className="text-5xl font-black tracking-tighter leading-none">{timerLabel}</h1>
+          </div>
+        )}
+
+        {/* RIGHT: LOGO PULSE */}
+        <div className="flex items-center gap-3 min-w-[250px] justify-end">
+          <div className="h-[1px] w-8 bg-gradient-to-r from-transparent to-[#ccff00]/30" />
+          <h1 className="text-4xl font-black italic tracking-tighter uppercase text-white">
+            Pulse<span className="text-[#ccff00]">.</span>
           </h1>
-          <div className="h-[1px] w-12 bg-gradient-to-l from-transparent to-yellow-500/50" />
         </div>
-        <div className="text-[8px] tracking-[0.6em] text-slate-500 font-bold uppercase mt-1">
-          Tournament Management System — <span className="text-yellow-500/80">Premium Edition</span>
-        </div>
+
       </header>
 
       <main className="flex-1 flex gap-4 min-h-0 relative z-10 px-2 overflow-hidden">
-        {/* WINNER BRACKET (Large) */}
+        {/* WINNER BRACKET (Génération principale) */}
         <div className="w-[30%] flex flex-col h-full">
-          <BracketCard rounds={winnerData} className="h-full border-none bg-transparent" matchWidth="w-[100px]" />
+          <BracketCard
+            rounds={winnerData}
+            className="h-full border-none bg-transparent"
+            matchWidth="w-[120px]"
+          />
         </div>
 
         {isPlacementBracketPhase ? (
           <div className="flex-1 min-h-0 overflow-hidden">
             {sizedPlacementTrees.length > 0 ? (
-              <div className="h-full flex flex-col gap-3">
+              <div className="h-full flex flex-col gap-4">
+
+                {/* SECTION PHASES COURTES (Grille fixe 6 colonnes) */}
                 {compactPlacementTrees.length > 0 && (
-                  <div className="rounded border border-white/10 bg-white/[0.015] p-2">
-                    <div className="text-[8px] font-black uppercase tracking-widest text-white/60 mb-2">
-                      Phases courtes
-                    </div>
-                    <div className="flex flex-wrap gap-2">
+                  <div className="w-full">
+                    <div className="grid grid-cols-6 gap-2 w-full">
                       {compactPlacementTrees.map((tree) => (
                         <BracketCard
                           key={`${tree.start}-${tree.end}`}
                           title={tree.title}
                           rounds={tree.rounds}
-                          className="w-[180px] h-[108px]"
-                          matchWidth="w-[64px]"
+                          className="w-full h-[115px] bg-slate-950/40 border-white/5"
+                          matchWidth="w-full"
                         />
                       ))}
                     </div>
                   </div>
                 )}
 
+                {/* SECTION GRANDS BRACKETS (Remplissage de l'espace restant) */}
                 <div className="flex-1 min-h-0">
                   {mainPlacementTrees.length > 0 ? (
                     <div className="h-full grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 auto-rows-fr">
@@ -398,13 +458,14 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
                           key={`${tree.start}-${tree.end}`}
                           title={tree.title}
                           rounds={tree.rounds}
-                          className={tree.totalMatches >= 4 ? 'min-h-[170px]' : 'min-h-[140px]'}
+                          className={`bg-slate-900/20 border-white/5 ${tree.totalMatches >= 4 ? 'h-full' : 'min-h-[140px]'}`}
+                          matchWidth="w-[100px]"
                         />
                       ))}
                     </div>
                   ) : (
-                    <div className="h-full flex items-center justify-center opacity-40 text-[10px] font-bold uppercase tracking-widest">
-                      Aucun grand bracket de placement
+                    <div className="h-full flex items-center justify-center border border-dashed border-white/5 rounded-lg opacity-20 text-[10px] font-bold uppercase tracking-widest">
+                      Aucun bracket de placement étendu
                     </div>
                   )}
                 </div>
@@ -416,38 +477,20 @@ export default function App({ initialPhaseId = null, phases = [], matches = [], 
             )}
           </div>
         ) : (
-          <div className="flex-1 flex flex-col gap-4">
+          /* FALLBACK : AFFICHAGE CLASSIQUE SI PAS DE SPLIT */
+          <div className="flex-1 grid grid-cols-2 gap-4">
             {placementTrees.map((tree) => (
               <BracketCard
                 key={`${tree.start}-${tree.end}`}
                 title={tree.title}
                 rounds={tree.rounds}
-                className="flex-1"
+                className="h-full bg-slate-900/20 border-white/5"
+                matchWidth="w-[120px]"
               />
             ))}
           </div>
         )}
       </main>
-
-      <footer className="mt-6 flex justify-between items-end relative z-10 border-t border-white/5 pt-4">
-        <div className="flex flex-col">
-          <div className="flex items-center gap-2 mb-1">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-            <span className={`text-[8px] font-mono uppercase ${remainingTimerSeconds === 0 ? 'text-rose-400' : 'text-slate-500'}`}>
-              {timerLabel
-                ? `${timerMode === 'BREAK' ? 'Temps de battement' : 'Fin de session'} ${timerLabel}`
-                : 'Status: Live'}
-            </span>
-          </div>
-        </div>
-        
-        <div className="flex flex-col items-end">
-          <span className="text-[8px] text-yellow-500 font-black uppercase tracking-widest mb-1">Tableau Officiel</span>
-          <h2 className="text-4xl font-black italic text-white leading-none uppercase tracking-tighter">
-            {currentPhase?.name || 'Phase de Classement'}
-          </h2>
-        </div>
-      </footer>
     </div>
   );
 }

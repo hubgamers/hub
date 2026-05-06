@@ -59,11 +59,8 @@ type Props = {
 
 const CARDS_PER_SLIDE = 4
 
-/**
- * UTILS: Styles dynamiques pour les règles de qualification et statuts
- */
 function getQualificationRuleTone(ruleType: 'TOP' | 'BOTTOM' | 'RANGE') {
-    if (ruleType === 'TOP') return { badge: 'border-teal-500/30 bg-teal-500/10 text-teal-300', dot: 'bg-teal-400', row: 'bg-teal-500/20 ring-1 ring-teal-500/30', text: 'text-teal-300' }
+    if (ruleType === 'TOP') return { badge: 'border-[#ccff00]/30 bg-[#ccff00]/10 text-[#ccff00]', dot: 'bg-[#ccff00]', row: 'bg-[#ccff00]/20 ring-1 ring-[#ccff00]/30', text: 'text-[#ccff00]' }
     if (ruleType === 'RANGE') return { badge: 'border-amber-500/30 bg-amber-500/10 text-amber-300', dot: 'bg-amber-400', row: 'bg-amber-500/20 ring-1 ring-amber-500/30', text: 'text-amber-300' }
     return { badge: 'border-rose-500/30 bg-rose-500/10 text-rose-300', dot: 'bg-rose-400', row: 'bg-rose-500/20 ring-1 ring-rose-500/30', text: 'text-rose-300' }
 }
@@ -85,14 +82,7 @@ function getMatchStatusTone(status: string) {
 }
 
 function initialsFromTeamName(name: string): string {
-    return name
-        .trim()
-        .split(/[\s-]+/) // Sépare par les espaces ET les tirets (ex: "Paris-SG")
-        .map(word => word[0])
-        .filter(Boolean)
-        .slice(0, 6) // 3 lettres est souvent le standard (ex: PSG, RMD, LIV)
-        .join('')
-        .toUpperCase();
+    return name.trim().split(/[\s-]+/).map(word => word[0]).filter(Boolean).slice(0, 6).join('').toUpperCase();
 }
 
 export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refreshMs = 10000, timerSeconds = 0, timerStartMs = null, timerMode = 'MATCH', backgroundImageUrl = null, backgroundDim = 0.55 }: Props) {
@@ -102,13 +92,11 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
     const [nowMs, setNowMs] = useState(() => Date.now())
     const router = useRouter()
 
-    // 1. Horloge temps réel pour le timer
     useEffect(() => {
         const interval = window.setInterval(() => setNowMs(Date.now()), 1000)
         return () => window.clearInterval(interval)
     }, [])
 
-    // 2. Logique du Timer de fin de match / slot
     const remainingTimerSeconds = useMemo(() => {
         if (!timerStartMs || timerSeconds <= 0) return null
         const endMs = timerStartMs + (timerSeconds * 1000)
@@ -124,7 +112,6 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
         return `${pad(m)}:${pad(s)}`
     }, [remainingTimerSeconds])
 
-    // 3. Découpage des slides (4 cartes par vue)
     const slides = useMemo(() => {
         const nextSlides: Array<Array<GroupCard | null>> = []
         for (let i = 0; i < cards.length; i += CARDS_PER_SLIDE) {
@@ -135,14 +122,12 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
         return nextSlides.length > 0 ? nextSlides : [[null, null, null, null]]
     }, [cards])
 
-    // 4. Rotation automatique des slides
     useEffect(() => {
         if (slides.length <= 1) return
         const interval = window.setInterval(() => setActiveSlide((c) => (c + 1) % slides.length), rotationMs)
         return () => window.clearInterval(interval)
     }, [rotationMs, slides.length])
 
-    // 5. Rafraîchissement des données via Next.js router
     useEffect(() => {
         const interval = window.setInterval(() => {
             if (document.visibilityState !== 'visible') return
@@ -155,6 +140,7 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
 
     const currentSlide = slides[activeSlide] || slides[0]
     const lastSyncLabel = useMemo(() => new Intl.DateTimeFormat('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(lastSyncAt), [lastSyncAt])
+    
     const rootStyle = useMemo(() => {
         if (!backgroundImageUrl) return undefined
         return {
@@ -171,23 +157,19 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
             {/* HEADER AREA */}
             <header className="mb-4 flex items-end justify-between border-b border-white/10 pb-4">
                 <div className="flex flex-col">
-                    <h1 className="text-4xl font-black tracking-tighter leading-none">
-                        LIVE <span className="text-teal-400">SCOREBOARD</span>
-                    </h1>
-                    <p className="text-[10px] font-bold tracking-[0.4em] text-slate-500 not-italic uppercase mt-1">Actualisation {Math.round(refreshMs / 1000)}s</p>
+                    {timerLabel && (
+                        <div className={`flex items-center gap-2 text-sm font-black tracking-tighter ${remainingTimerSeconds === 0 ? 'text-rose-500 animate-pulse' : 'text-[#ccff00]'}`}>
+                            <span className="text-[9px] opacity-60 tracking-widest uppercase not-italic">{timerMode === 'BREAK' ? 'Temps de battement' : 'Session en cours'}</span>
+                            <h1 className="text-5xl font-black tracking-tighter leading-none">{timerLabel}</h1>
+                        </div>
+                    )}
                 </div>
 
                 <div className="text-right flex flex-col items-end gap-1">
-                    {timerLabel && (
-                        <div className={`flex items-center gap-2 text-sm font-black tracking-tighter ${remainingTimerSeconds === 0 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`}>
-                            <span className="text-[9px] opacity-60 tracking-widest uppercase not-italic">{timerMode === 'BREAK' ? 'Temps de battement' : 'Fin de session'}</span>
-                            <span className="text-2xl tabular-nums leading-none">{timerLabel}</span>
-                        </div>
-                    )}
                     <p className="text-[9px] text-slate-500 not-italic font-bold tracking-widest uppercase">Page {activeSlide + 1}/{slides.length} • Sync {lastSyncLabel}</p>
                     <div className="flex gap-1 mt-1">
                         {slides.map((_, i) => (
-                            <div key={i} className={`h-1 rounded-full transition-all duration-500 ${i === activeSlide ? 'w-8 bg-teal-500' : 'w-2 bg-slate-800'}`} />
+                            <div key={i} className={`h-1 rounded-full transition-all duration-500 ${i === activeSlide ? 'w-8 bg-[#ccff00]' : 'w-2 bg-slate-800'}`} />
                         ))}
                     </div>
                 </div>
@@ -200,9 +182,8 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
 
                     return (
                         <article key={card.key} className="flex flex-col overflow-hidden rounded-xl border border-white/10 bg-slate-900/40 backdrop-blur-sm shadow-xl">
-                            {/* Card Header */}
                             <div className="bg-white/5 px-3 py-1.5 flex justify-between items-center border-b border-white/5">
-                                <h3 className="text-sm font-black text-teal-400 tracking-tight">POULE {card.groupIndex}</h3>
+                                <h3 className="text-sm font-black text-[#ccff00] tracking-tight">POULE {card.groupIndex}</h3>
                                 <span className="text-[8px] text-slate-500 not-italic font-bold tracking-widest">{card.phaseName}</span>
                             </div>
 
@@ -213,8 +194,8 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
                                     <table className="w-full text-[12px] border-separate border-spacing-y-1">
                                         <thead>
                                             <tr className="text-slate-500 not-italic">
-                                                <th className="px-1 py-1 text-left font-bold">#</th>
-                                                <th className="px-1 py-1 text-left font-bold">LOGO</th>
+                                                <th className="px-1 py-1 text-left font-bold">Rang</th>
+                                                <th className="px-1 py-1 text-left font-bold">éQUIPE</th>
                                                 <th className="px-1 py-1 text-center font-bold">PTS</th>
                                                 <th className="px-1 py-1 text-center font-bold">J</th>
                                                 <th className="px-1 py-1 text-center font-bold">GD</th>
@@ -224,20 +205,16 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
                                             {card.standings.slice(0, 6).map((row, i) => {
                                                 const rule = getQualificationRuleForRank(card, i + 1)
                                                 const tone = rule ? getQualificationRuleTone(rule.type) : null
-                                                const gdColor = row.goalDiff > 0 ? 'text-emerald-400' : row.goalDiff < 0 ? 'text-red-400' : 'text-slate-400'
+                                                const gdColor = row.goalDiff > 0 ? 'text-[#ccff00]' : row.goalDiff < 0 ? 'text-red-400' : 'text-slate-400'
 
                                                 return (
                                                     <tr key={row.teamId} className={`${tone ? tone.row : 'bg-white/5'} transition-all`}>
                                                         <td className={`px-2 py-1 font-black ${tone ? tone.text : 'text-slate-500'}`}>{i + 1}</td>
                                                         <td className="px-1 py-1">
                                                             {row.teamLogoUrl ? (
-                                                                <img
-                                                                    src={row.teamLogoUrl}
-                                                                    alt={`Logo ${row.teamName}`}
-                                                                    className="h-13 w-13 object-contain block shrink-0"
-                                                                />
+                                                                <img src={row.teamLogoUrl} alt={row.teamName} className="h-13 w-13 object-contain block shrink-0" />
                                                             ) : (
-                                                                <div className="flex h-13 w-13 items-center justify-center rounded-md border border-white/10 bg-slate-800 text-[9px] font-black text-slate-200">
+                                                                <div className="flex h-13 w-13 items-center justify-center rounded-md border border-white/10 bg-slate-800 text-[8px] font-black text-slate-200">
                                                                     {initialsFromTeamName(row.teamName)}
                                                                 </div>
                                                             )}
@@ -274,13 +251,12 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
                                                     <div className="flex items-center justify-between mt-1 opacity-60">
                                                         <span className="text-[7px] font-bold text-slate-400 not-italic truncate w-24 uppercase tracking-tighter">{match.pitchName}</span>
                                                         <span className={`text-[7px] font-black uppercase ${isLive ? 'text-emerald-400' : 'text-slate-600'}`}>
-                                                            {isLive ? (isActiveSlotLive ? '● DIRECT' : '● DIRECT') : match.label}
+                                                            {isLive ? '● DIRECT' : match.label}
                                                         </span>
                                                     </div>
                                                 </div>
                                             )
                                         })}
-                                        {card.featuredMatches.length === 0 && <div className="py-10 text-center text-[8px] opacity-20 italic">Aucune rencontre programmée</div>}
                                     </div>
                                 </div>
                             </div>
@@ -293,7 +269,7 @@ export default function PoolsOverlayCarousel({ cards, rotationMs = 20000, refres
             <div className="absolute bottom-0 left-0 h-1 w-full bg-slate-900/50">
                 <div
                     key={`${activeSlide}-${refreshCycle}`}
-                    className="h-full bg-teal-500 shadow-[0_0_12px_rgba(20,184,166,0.8)]"
+                    className="h-full bg-[#ccff00] shadow-[0_0_12px_rgba(204,255,0,0.8)]"
                     style={{ animation: `progress ${rotationMs}ms linear forwards` }}
                 />
             </div>
