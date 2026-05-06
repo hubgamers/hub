@@ -121,6 +121,13 @@ export default async function PublicTournamentPage({
                         >
                             Overlay classement general
                         </Link>
+
+                         <Link
+                            href={buildOverlayHref(`/public/${orgSlug}/${tournamentSlug}/tablet`, bg, bgDim)}
+                            className="rounded-lg border border-teal-300 bg-teal-50 px-3 py-2 text-xs font-semibold text-teal-700 hover:bg-teal-100"
+                        >
+                            Tablette de score
+                        </Link>
                     </div>
                 </section>
 
