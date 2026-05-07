@@ -632,64 +632,171 @@ function collectGroupQualifierIdsByRoute(
 ): string[] {
   const rankBuckets: string[][] = []
 
+  // =========================================================
+  // TOP
+  // =========================================================
+
   if (route.rule === 'TOP' && route.countPerGroup) {
-    for (let rank = 0; rank < route.countPerGroup; rank += 1) {
+    for (
+      let rank = 0;
+      rank < route.countPerGroup;
+      rank += 1
+    ) {
       const bucket: string[] = []
+
       for (const group of groupStandings) {
-        if (group[rank]) bucket.push(group[rank])
+        if (group[rank]) {
+          bucket.push(group[rank])
+        }
       }
-      rankBuckets.push(bucket)
-    }
-  } else if (route.rule === 'BOTTOM' && route.countPerGroup) {
-    for (let rank = 0; rank < route.countPerGroup; rank += 1) {
-      const bucket: string[] = []
-      for (const group of groupStandings) {
-        const idx = group.length - 1 - rank
-        if (idx >= 0 && group[idx]) bucket.push(group[idx])
-      }
-      rankBuckets.push(bucket)
-    }
-  } else if (route.rule === 'RANGE' && route.startRank && route.endRank) {
-    for (let rank = route.startRank - 1; rank < route.endRank; rank += 1) {
-      const bucket: string[] = []
-      for (const group of groupStandings) {
-        if (group[rank]) bucket.push(group[rank])
-      }
+
       rankBuckets.push(bucket)
     }
   }
+
+  // =========================================================
+  // BOTTOM
+  // =========================================================
+
+  else if (
+    route.rule === 'BOTTOM' &&
+    route.countPerGroup
+  ) {
+    for (
+      let rank = 0;
+      rank < route.countPerGroup;
+      rank += 1
+    ) {
+      const bucket: string[] = []
+
+      for (const group of groupStandings) {
+        const idx = group.length - 1 - rank
+
+        if (idx >= 0 && group[idx]) {
+          bucket.push(group[idx])
+        }
+      }
+
+      rankBuckets.push(bucket)
+    }
+  }
+
+  // =========================================================
+  // RANGE
+  // =========================================================
+
+  else if (
+    route.rule === 'RANGE' &&
+    route.startRank &&
+    route.endRank
+  ) {
+    for (
+      let rank = route.startRank - 1;
+      rank < route.endRank;
+      rank += 1
+    ) {
+      const bucket: string[] = []
+
+      for (const group of groupStandings) {
+        if (group[rank]) {
+          bucket.push(group[rank])
+        }
+      }
+
+      rankBuckets.push(bucket)
+    }
+  }
+
+  // =========================================================
+  // FALLBACK
+  // =========================================================
 
   if (rankBuckets.length !== 2) {
     return rankBuckets.flat()
   }
 
   const [higherRank, lowerRank] = rankBuckets
+
   const ordered: string[] = []
-  const consumedLower = new Set<number>()
-  const pairCount = Math.min(higherRank.length, lowerRank.length)
 
-  // Mirror lower-ranked qualifiers to avoid same-group pairings when possible.
-  for (let index = 0; index < pairCount; index += 1) {
-    const higherTeamId = higherRank[index]
-    if (higherTeamId) ordered.push(higherTeamId)
+  const pairCount = Math.min(
+    higherRank.length,
+    lowerRank.length
+  )
 
-    const mirroredLowerIndex = lowerRank.length - 1 - index
-    const lowerTeamId = lowerRank[mirroredLowerIndex]
-    if (lowerTeamId) {
-      ordered.push(lowerTeamId)
-      consumedLower.add(mirroredLowerIndex)
+  // =========================================================
+  // DIRECT CROSS PAIRING
+  //
+  // 1A vs 2B
+  // 1B vs 2A
+  // 1C vs 2D
+  // 1D vs 2C
+  // =========================================================
+
+  for (
+    let index = 0;
+    index < pairCount;
+    index += 2
+  ) {
+    const higherA = higherRank[index]
+    const higherB = higherRank[index + 1]
+
+    const lowerA = lowerRank[index]
+    const lowerB = lowerRank[index + 1]
+
+    // Match 1
+    if (higherA) {
+      ordered.push(higherA)
+    }
+
+    if (lowerB) {
+      ordered.push(lowerB)
+    }
+
+    // Match 2
+    if (higherB) {
+      ordered.push(higherB)
+    }
+
+    if (lowerA) {
+      ordered.push(lowerA)
     }
   }
 
-  for (let index = pairCount; index < higherRank.length; index += 1) {
-    const teamId = higherRank[index]
-    if (teamId) ordered.push(teamId)
+  // =========================================================
+  // REMAINING HIGHER
+  // =========================================================
+
+  if (higherRank.length > pairCount) {
+    for (
+      let index = pairCount;
+      index < higherRank.length;
+      index += 1
+    ) {
+      const teamId = higherRank[index]
+
+      if (teamId) {
+        ordered.push(teamId)
+      }
+    }
   }
 
-  for (let index = 0; index < lowerRank.length; index += 1) {
-    if (consumedLower.has(index)) continue
-    const teamId = lowerRank[index]
-    if (teamId) ordered.push(teamId)
+  // =========================================================
+  // REMAINING LOWER
+  // =========================================================
+
+  if (lowerRank.length > pairCount) {
+    for (
+      let index = pairCount;
+      index < lowerRank.length;
+      index += 1
+    ) {
+      const teamId = lowerRank[index]
+
+      if (teamId) {
+        ordered.push(teamId)
+      }
+    }
   }
 
   return ordered
@@ -1472,35 +1579,102 @@ function buildBracketSkeleton(params: {
     roundDurationMs,
   } = params
 
-  const rounds = Math.ceil(Math.log2(effectiveParticipantsCount))
+  const rounds = Math.ceil(
+    Math.log2(effectiveParticipantsCount)
+  )
+
   const normalizedSize = 2 ** rounds
 
   const skeleton: BracketSkeletonMatch[] = []
 
-  for (let round = 1; round <= rounds; round += 1) {
-    const matchesInRound = normalizedSize / 2 ** round
-    for (let matchNo = 1; matchNo <= matchesInRound; matchNo += 1) {
-      skeleton.push({ phaseId, roundNumber: round, bracketPos: `WB-R${round}-M${matchNo}` })
+  // =========================================================
+  // WINNERS BRACKET
+  // =========================================================
+
+  for (
+    let round = 1;
+    round <= rounds;
+    round += 1
+  ) {
+    const matchesInRound =
+      normalizedSize / 2 ** round
+
+    for (
+      let matchNo = 1;
+      matchNo <= matchesInRound;
+      matchNo += 1
+    ) {
+      skeleton.push({
+        phaseId,
+        roundNumber: round,
+        bracketPos: `WB-R${round}-M${matchNo}`,
+      })
     }
   }
 
-  if (phaseType !== 'PLACEMENT_BRACKET' && includeLosersReplay) {
-    for (let round = 1; round <= rounds; round += 1) {
-      const matchesInRound = Math.max(1, normalizedSize / 2 ** (round + 1))
-      for (let matchNo = 1; matchNo <= matchesInRound; matchNo += 1) {
-        skeleton.push({ phaseId, roundNumber: rounds + round, bracketPos: `LB-R${round}-M${matchNo}` })
+  // =========================================================
+  // LOSERS BRACKET
+  // =========================================================
+
+  if (
+    phaseType !== 'PLACEMENT_BRACKET' &&
+    includeLosersReplay
+  ) {
+    for (
+      let round = 1;
+      round <= rounds;
+      round += 1
+    ) {
+      const matchesInRound = Math.max(
+        1,
+        normalizedSize / 2 ** (round + 1)
+      )
+
+      for (
+        let matchNo = 1;
+        matchNo <= matchesInRound;
+        matchNo += 1
+      ) {
+        skeleton.push({
+          phaseId,
+          roundNumber: rounds + round,
+          bracketPos: `LB-R${round}-M${matchNo}`,
+        })
       }
     }
   }
 
-  if (phaseType === 'PLACEMENT_BRACKET' && normalizedSize >= 4) {
-    const parsedRanges = parsePlacementRootRanges({ value: placementRanges ?? undefined, normalizedSize, rounds })
-    if ('error' in parsedRanges) return { error: parsedRanges.error }
+  // =========================================================
+  // PLACEMENT MATCHES
+  // =========================================================
 
-    const pitchCursorRef = { value: 0 }
+  if (
+    phaseType === 'PLACEMENT_BRACKET' &&
+    normalizedSize >= 4
+  ) {
+    const parsedRanges = parsePlacementRootRanges({
+      value: placementRanges ?? undefined,
+      normalizedSize,
+      rounds,
+    })
+
+    if ('error' in parsedRanges) {
+      return {
+        error: parsedRanges.error,
+      }
+    }
+
+    const pitchCursorRef = {
+      value: 0,
+    }
+
     let dynamicOffsetCursor = rounds * 2
+
     for (const range of parsedRanges.ranges) {
-      const stageOffset = range.wbRound ? rounds + range.wbRound : dynamicOffsetCursor
+      const stageOffset = range.wbRound
+        ? rounds + range.wbRound
+        : dynamicOffsetCursor
+
       skeleton.push(
         ...buildPlacementRangeSkeleton({
           phaseId,
@@ -1513,29 +1687,80 @@ function buildBracketSkeleton(params: {
           stageOffset,
         })
       )
+
       if (!range.wbRound) {
-        dynamicOffsetCursor += Math.max(1, Math.log2(range.end - range.start + 1))
+        dynamicOffsetCursor += Math.max(
+          1,
+          Math.log2(range.end - range.start + 1)
+        )
       }
     }
   } else if (normalizedSize >= 4) {
-    for (let place = 3; place <= normalizedSize; place += 2) {
-      skeleton.push({ phaseId, roundNumber: rounds + 10, bracketPos: `P${place}-P${place + 1}` })
+    for (
+      let place = 3;
+      place <= normalizedSize;
+      place += 2
+    ) {
+      skeleton.push({
+        phaseId,
+        roundNumber: rounds + 10,
+        bracketPos: `P${place}-P${place + 1}`,
+      })
     }
   }
 
-  const firstRoundMatches = skeleton
-    .filter((m) => m.roundNumber === 1 && m.bracketPos.startsWith('WB-R1-'))
-    .sort((a, b) => a.bracketPos.localeCompare(b.bracketPos))
+  // =========================================================
+  // FIRST ROUND
+  // =========================================================
 
-  for (let i = 0; i < firstRoundMatches.length; i += 1) {
+  const firstRoundMatches = skeleton
+    .filter(
+      (m) =>
+        m.roundNumber === 1 &&
+        m.bracketPos.startsWith('WB-R1-')
+    )
+    .sort((a, b) => {
+      const matchA = Number(
+        a.bracketPos.split('-M')[1] ?? 0
+      )
+
+      const matchB = Number(
+        b.bracketPos.split('-M')[1] ?? 0
+      )
+
+      return matchA - matchB
+    })
+
+  // =========================================================
+  // DIRECT SEED INJECTION
+  // =========================================================
+
+  for (
+    let i = 0;
+    i < firstRoundMatches.length;
+    i += 1
+  ) {
     const slot = firstRoundMatches[i]
-    slot.homeTeamId = seededTeamIds[i * 2] ?? null
-    slot.awayTeamId = seededTeamIds[i * 2 + 1] ?? null
+
+    slot.homeTeamId =
+      seededTeamIds[i * 2] ?? null
+
+    slot.awayTeamId =
+      seededTeamIds[i * 2 + 1] ?? null
   }
+
+  // =========================================================
+  // UNIQUE
+  // =========================================================
 
   return {
     skeleton: Array.from(
-      new Map(skeleton.map((item) => [`${item.phaseId}:${item.bracketPos}`, item])).values()
+      new Map(
+        skeleton.map((item) => [
+          `${item.phaseId}:${item.bracketPos}`,
+          item,
+        ])
+      ).values()
     ),
   }
 }
