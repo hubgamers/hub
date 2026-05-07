@@ -1385,6 +1385,7 @@ function scheduleRoundRobinMatches(params: {
     scheduledAt: Date
   }> = []
 
+  
   while (pending.length > 0) {
     let bestPairingIndex = 0
     let bestPitchId = pitchResources[0]?.id
