@@ -247,7 +247,6 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
                                     onChange={(event) => {
                                         const value = event.target.value;
                                         const patch: Partial<(typeof rows)[number]> = { homeScore: value === "" ? null : Number(value) };
-                                        if (value !== "") patch.status = "FINISHED";
                                         updateRow(match.id, patch);
                                     }}
                                     className="w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-2 text-xs"
@@ -262,7 +261,6 @@ export default function MatchBulkEditor({ tournamentId, orgSlug, tournamentSlug,
                                     onChange={(event) => {
                                         const value = event.target.value;
                                         const patch: Partial<(typeof rows)[number]> = { awayScore: value === "" ? null : Number(value) };
-                                        if (value !== "") patch.status = "FINISHED";
                                         updateRow(match.id, patch);
                                     }}
                                     className="w-full rounded-md border border-slate-300 bg-slate-50 px-2 py-2 text-xs"
